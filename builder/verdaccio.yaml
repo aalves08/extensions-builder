@@ -1,0 +1,53 @@
+# Verdaccio config for the in-pod registry.
+#
+# The upstream CI (extension-compatibility-test.yml / test-plugins-build.sh)
+# creates an htpasswd admin user and juggles a real auth token. We don't need
+# that here: nothing outside the pod can reach this registry, so publishing is
+# simply open and the entrypoint writes a dummy _authToken to ~/.npmrc (npm
+# insists on *some* auth config before it will publish, even to an open registry).
+#
+# @rancher/* keeps the npmjs proxy so that any @rancher package we did NOT build
+# locally still resolves. Verdaccio always prefers its local copy, and the shell
+# packages are published as 99.99.99 - a version that cannot exist upstream - so
+# the read-through cache has nothing to conflict with.
+
+storage: /work/verdaccio/storage
+self_path: /work/verdaccio
+
+uplinks:
+  npmjs:
+    url: https://registry.npmjs.org/
+    timeout: 60s
+    max_fails: 10
+    fail_timeout: 2m
+    cache: false
+
+packages:
+  '@rancher/*':
+    access: $all
+    publish: $all
+    unpublish: $all
+    proxy: npmjs
+
+  '@*/*':
+    access: $all
+    publish: $all
+    unpublish: $all
+    proxy: npmjs
+
+  '**':
+    access: $all
+    publish: $all
+    unpublish: $all
+    proxy: npmjs
+
+publish:
+  allow_offline: true
+
+# Extension dependency trees are large; the default body limit rejects some tarballs.
+max_body_size: 500mb
+
+log:
+  type: stdout
+  format: pretty
+  level: warn

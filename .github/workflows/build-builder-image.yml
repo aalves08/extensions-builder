@@ -1,0 +1,91 @@
+name: Build and Push Builder Image
+
+# The container that runs the actual build inside the cluster. Published
+# separately from the UI extension because it changes far less often.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to publish (default: head)"
+        required: false
+        type: string
+        default: "head"
+  push:
+    branches: [main]
+    paths:
+      - 'builder/**'
+      - '.github/workflows/build-builder-image.yml'
+  release:
+    types: [released]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}-image
+
+defaults:
+  run:
+    shell: bash
+    working-directory: ./
+
+jobs:
+  build:
+    name: Build builder image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=head,enable=${{ github.event_name == 'push' }}
+            type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=ref,event=tag
+            type=sha,format=short
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./builder
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        # GitHub has no REST endpoint for package visibility - it is a UI-only
+        # action - so the best this can do is say where to go. A GHCR package is
+        # private on first publish and does not inherit the repository's
+        # visibility, so a cluster with no pull secret cannot pull it until
+        # someone flips it by hand. Once only: public cannot be undone.
+        run: |
+          {
+            echo "### Builder image published"
+            echo
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+            echo
+            echo "If a cluster cannot pull this image, the package is still private."
+            echo "Make it public once, under Danger Zone:"
+            echo
+            echo "<https://github.com/users/${{ github.repository_owner }}/packages/container/$(basename '${{ env.IMAGE_NAME }}')/settings>"
+          } >> "$GITHUB_STEP_SUMMARY"
