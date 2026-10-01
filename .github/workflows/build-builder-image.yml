@@ -39,6 +39,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Every leg except the runner's own amd64 is emulated, so this is what
+      # makes the arm64 and ppc64le builds possible at all.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -64,6 +69,12 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ./builder
+          # The build pod lands on whatever node the scheduler picks, so the
+          # image has to cover every architecture that node might be. This is
+          # the full set: node:24-bookworm publishes amd64, arm64 and ppc64le
+          # and nothing else, so s390x and armv7 are not possible without
+          # changing the base image.
+          platforms: linux/amd64,linux/arm64,linux/ppc64le
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

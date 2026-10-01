@@ -14,6 +14,15 @@ ARG HELM_VERSION=v3.16.3
 ARG YQ_VERSION=v4.44.3
 ARG NVM_VERSION=v0.40.3
 
+# Populated by BuildKit per target platform: amd64, arm64 or ppc64le, which is
+# exactly how helm and yq name their release assets.
+#
+# Must be redeclared with NO default. Giving it one wins over the value BuildKit
+# supplies, which silently puts x86 binaries in an arm64 image - they then run
+# fine under emulation on a developer machine and die with "exec format error"
+# on a real arm64 node.
+ARG TARGETARCH
+
 ENV DEBIAN_FRONTEND=noninteractive \
     NVM_DIR=/usr/local/nvm \
     NUXT_TELEMETRY_DISABLED=1 \
@@ -28,15 +37,15 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # helm - used to package the ui-plugin-server chart and build the repo index
-RUN curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" \
+RUN curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${TARGETARCH}.tar.gz" \
       | tar -xz -C /tmp \
- && mv /tmp/linux-amd64/helm /usr/local/bin/helm \
- && rm -rf /tmp/linux-amd64 \
+ && mv "/tmp/linux-${TARGETARCH}/helm" /usr/local/bin/helm \
+ && rm -rf "/tmp/linux-${TARGETARCH}" \
  && helm version --short
 
 # yq - the upstream chart patch script (shell/scripts/extension/helm/scripts/patch)
 # requires the Go implementation, not the python one.
-RUN curl -fsSL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" \
+RUN curl -fsSL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${TARGETARCH}" \
       -o /usr/local/bin/yq \
  && chmod +x /usr/local/bin/yq \
  && yq --version
