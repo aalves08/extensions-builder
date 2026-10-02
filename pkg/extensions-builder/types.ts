@@ -53,6 +53,15 @@ export interface BuildSpec {
   };
 }
 
+/**
+ * A build spec before its repo URL is known.
+ *
+ * The URL contains the Service's ClusterIP, which Kubernetes only allocates on
+ * create, so the spec is assembled in two steps: everything the form knows,
+ * then the repo once the Service exists.
+ */
+export type BuildSpecDraft = Omit<BuildSpec, 'repo'>;
+
 export type PhaseState = 'pending' | 'running' | 'success' | 'failed' | 'skipped';
 
 export interface BuildPhase {

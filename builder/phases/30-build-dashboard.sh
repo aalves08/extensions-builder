@@ -7,7 +7,7 @@
 #
 # Unlike the Helm repo and the UIPlugin endpoint - both fetched server-side by
 # Rancher - the dashboard bundle is fetched by the BROWSER. A cluster-internal
-# .svc URL will not work, so the spec carries a separate, externally reachable
+# address will not work, so the spec carries a separate, externally reachable
 # publicUrl (backed by an Ingress) and we bake it in as RESOURCE_BASE.
 #
 # ROUTER_BASE / RESOURCE_BASE / OUTPUT_DIR are read by shell/vue.config.js.

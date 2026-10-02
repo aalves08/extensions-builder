@@ -1,5 +1,6 @@
 <script lang="ts">
 import { defineComponent, PropType } from 'vue';
+import { HIDDEN_PHASES } from '../config/builder';
 import { BuildPhase } from '../types';
 import { formatDuration } from '../utils/build-log';
 import rawTranslations from '../utils/i18n';
@@ -21,6 +22,16 @@ export default defineComponent({
     phases: {
       type:    Array as PropType<BuildPhase[]>,
       default: () => []
+    }
+  },
+
+  computed: {
+    /**
+     * A phase can be hidden without the builder knowing: it still runs, still
+     * reports, and still shows up in the log - it just is not drawn here.
+     */
+    visiblePhases(): BuildPhase[] {
+      return this.phases.filter((phase) => !HIDDEN_PHASES.includes(phase.name));
     }
   },
 
@@ -53,7 +64,7 @@ export default defineComponent({
 <template>
   <ol class="phase-stepper">
     <li
-      v-for="phase in phases"
+      v-for="phase in visiblePhases"
       :key="phase.name"
       :class="['phase', `phase--${ phase.state }`]"
     >

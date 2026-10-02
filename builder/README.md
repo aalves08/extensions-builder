@@ -68,7 +68,7 @@ produce a build that silently does the wrong thing.
     }
   ],
   "repo": {
-    "serviceUrl": "http://extensions-builder-repo-pr13579-a1b2.cattle-extensions-builder.svc:8080"
+    "serviceUrl": "http://10.43.1.74:8080"
   }
 }
 ```
@@ -82,10 +82,17 @@ A few notes on the fields that are easy to get wrong:
   charts rather than source, so it is deliberately *not* used here.
 - `extensions[].name` doubles as the clone directory name, so it has to be
   unique within a build.
-- `repo.serviceUrl` is baked into each chart's `plugin.endpoint`. It is a
-  cluster-internal `.svc` URL and that is fine: Rancher proxies extension
-  assets server-side through `/v1/uiplugins/...`, the browser never fetches it
-  directly.
+- `repo.serviceUrl` is baked into each chart's `plugin.endpoint`, and the
+  builder treats it as an opaque string — whatever you pass is what ends up in
+  the charts. Cluster-internal is fine here: the browser never fetches this,
+  Rancher proxies extension assets server-side through `/v1/uiplugins/...`.
+  The UI passes the repo Service's **ClusterIP** rather than its
+  `<svc>.<ns>.svc` name, because the thing doing the fetching is the Rancher
+  process, and a Rancher running outside the cluster — `docker run
+  rancher/rancher`, as every local dev setup does — resolves names against its
+  container's DNS, which knows nothing about cluster services. It can still
+  route to the service network, so an IP works where the name does not. If you
+  run the image by hand, any URL your Rancher can reach will do.
 - `dashboard.publicUrl` (only when `buildDashboard` is true) is the opposite
   case — the dashboard bundle *is* fetched by the browser, so this must be a URL
   the browser can actually reach, which is why the UI asks for an Ingress host.

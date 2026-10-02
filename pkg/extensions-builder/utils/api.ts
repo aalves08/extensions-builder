@@ -10,8 +10,10 @@ import {
   buildName,
   repoName
 } from '../config/builder';
-import { BuildSpec } from '../types';
-import { STEVE_TYPES, buildObjectsFor, publishObjectsFor } from './build-resources';
+import { BuildSpec, BuildSpecDraft } from '../types';
+import {
+  STEVE_TYPES, buildObjectsFor, publishObjectsFor, serviceFor, specWithRepo
+} from './build-resources';
 import {
   DEFAULT_CLASS_ANNOTATION,
   LOCAL_PATH_CLASS,
@@ -338,9 +340,31 @@ export async function ensureDefaultStorageClass(store: Store, clusterId = LOCAL_
   return remedy;
 }
 
-/** Create the ConfigMap, PVC and Job for a build, in that order. */
-export async function createBuild(store: Store, spec: BuildSpec): Promise<void> {
-  const objects = buildObjectsFor(spec);
+/** Create the Service, ConfigMap, PVC and Job for a build, in that order. */
+export async function createBuild(store: Store, draft: BuildSpecDraft): Promise<void> {
+  // The Service is created first, long before anything will talk to it, purely
+  // so Kubernetes allocates its ClusterIP: that IP is what the packaging phase
+  // bakes into every chart's plugin.endpoint, and the build cannot be told it
+  // after the fact. A Service with no endpoints costs nothing while the build
+  // runs; nginx is published over it later.
+  const created = await createResource(store, serviceFor(draft.buildId));
+  let clusterIP: string = created?.spec?.clusterIP || '';
+
+  if (!clusterIP) {
+    // Steve normally folds the API server's response back into the model it
+    // hands back, so this is belt and braces. Worth it: the cost of being
+    // wrong is a build that runs for 40 minutes and produces charts pointing
+    // at "http://undefined:8080".
+    const service = await findOrNull(store, STEVE_TYPES.SERVICE, `${ NAMESPACE }/${ repoName(draft.buildId) }`);
+
+    clusterIP = service?.spec?.clusterIP || '';
+  }
+
+  if (!clusterIP) {
+    throw new Error('Kubernetes did not assign a ClusterIP to the build repository service');
+  }
+
+  const objects = buildObjectsFor(specWithRepo(draft, clusterIP));
 
   // Order matters: the Job mounts both of the others, and a Job created first
   // would sit unschedulable while Kubernetes waits for them.
@@ -388,6 +412,26 @@ export interface PublishOptions {
   dashboardTlsSecret?: string;
 }
 
+/**
+ * The repo URL a build's charts were packaged against.
+ *
+ * Read back out of the build's own spec, which is the only place that knows
+ * it: the packaging phase has already written this exact string into every
+ * chart's plugin.endpoint, so the ClusterRepo has to agree with it rather than
+ * work it out again.
+ */
+async function packagedServiceUrl(store: Store, id: string): Promise<string> {
+  const configMap = await findOrNull(store, STEVE_TYPES.CONFIG_MAP, `${ NAMESPACE }/${ buildName(id) }`);
+  const raw = configMap?.data?.['build.json'];
+  const url = raw ? (JSON.parse(raw) as BuildSpec)?.repo?.serviceUrl : '';
+
+  if (!url) {
+    throw new Error(`Build ${ id } has no repository URL in its spec. Re-run the build to publish it.`);
+  }
+
+  return url;
+}
+
 /** Stand up nginx over the build's volume and register it as a ClusterRepo. */
 export async function publishBuild(store: Store, id: string, options: PublishOptions = {}): Promise<void> {
   // Cheap and idempotent. Covers a build that was queued before the config
@@ -395,13 +439,15 @@ export async function publishBuild(store: Store, id: string, options: PublishOpt
   // volume - 30 minutes after the mistake was made.
   await ensureNginxConfig(store);
 
+  // The Service already exists - it was created with the build, so that the
+  // packaging phase could bake its address into the charts.
   const objects = publishObjectsFor(
     id,
+    await packagedServiceUrl(store, id),
     options.dashboardHost ? { host: options.dashboardHost, tlsSecretName: options.dashboardTlsSecret } : undefined
   );
 
   await createResource(store, objects.deployment);
-  await createResource(store, objects.service);
 
   if (objects.ingress) {
     await createResource(store, objects.ingress);

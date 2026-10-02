@@ -67,6 +67,20 @@ export const REPO_VOLUME_SIZE = '5Gi';
 /** Scratch volume: clones, node_modules for the dashboard and every extension, verdaccio storage. */
 export const WORK_VOLUME_SIZE = '30Gi';
 
+/**
+ * Whether the UI offers to build the dashboard alongside the extensions.
+ *
+ * Off while the core flow is still being proven end to end. It roughly doubles
+ * the length of an already 20-40 minute build and brings its own moving parts
+ * - an Ingress, a browser-reachable host, a settings change on this Rancher -
+ * none of which are worth debugging at the same time as the extension build.
+ *
+ * Nothing is deleted behind this flag: the builder still has its phase, the
+ * spec still has the fields, HostUiCard is still wired up. Flipping this back
+ * to true restores all of it.
+ */
+export const DASHBOARD_BUILD_ENABLED = false;
+
 /** Ordered to match PHASE_NAMES in builder/lib/common.sh. The stepper renders in this order. */
 export const PHASES = [
   'resolve',
@@ -75,6 +89,15 @@ export const PHASES = [
   'build-extensions',
   'package'
 ] as const;
+
+/**
+ * Phases the stepper leaves out.
+ *
+ * Deliberately a display-time filter rather than a shorter PHASES: the builder
+ * still runs the phase and still emits its markers, and the parser has to go
+ * on understanding them. Hiding it here keeps the two lists in step.
+ */
+export const HIDDEN_PHASES: readonly string[] = DASHBOARD_BUILD_ENABLED ? [] : ['build-dashboard'];
 
 export const buildName = (id: string): string => `extensions-builder-${ id }`;
 export const repoName = (id: string): string => `extensions-builder-repo-${ id }`;
@@ -87,5 +110,20 @@ export const repoName = (id: string): string => `extensions-builder-repo-${ id }
  * /v1/uiplugins rather than fetched by the browser. The one thing that cannot
  * use this is the dashboard bundle, which the browser does fetch - that needs
  * the Ingress URL instead.
+ *
+ * An IP rather than `<svc>.<ns>.svc`, which is what Rancher itself uses for
+ * UI plugin repos, because both consumers are fetched by the Rancher *process*
+ * and Rancher is not always a pod in the cluster it manages. Run it the way
+ * every local dev setup does - `docker run rancher/rancher`, k3s embedded in
+ * the same container - and its resolver is the container's, which has never
+ * heard of cluster DNS: the repo then sits in Downloading forever with
+ * "no such host", and so does any extension installed from it. Routing into
+ * the service network still works there, so a ClusterIP is reachable where the
+ * name is not. It is equally reachable from inside the cluster, so this is not
+ * a dev-only workaround.
+ *
+ * The caller passes the IP because it is only knowable once the Service exists.
+ * That is why the Service is created before the Job rather than at publish
+ * time - see createBuild.
  */
-export const repoServiceUrl = (id: string): string => `http://${ repoName(id) }.${ NAMESPACE }.svc:${ NGINX_PORT }`;
+export const repoServiceUrl = (clusterIP: string): string => `http://${ clusterIP }:${ NGINX_PORT }`;

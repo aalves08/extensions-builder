@@ -21,7 +21,7 @@ import {
   repoName,
   repoServiceUrl
 } from '../config/builder';
-import { BuildSpec, ExtensionSource, ShellSource } from '../types';
+import { BuildSpec, BuildSpecDraft, ExtensionSource, ShellSource } from '../types';
 
 /**
  * Every Kubernetes object a build is made of, as plain data.
@@ -57,10 +57,14 @@ export interface BuildObjects {
   job: Record<string, unknown>;
 }
 
-/** Objects created afterwards, to serve what the build produced. */
+/**
+ * Objects created afterwards, to serve what the build produced.
+ *
+ * No Service: that one is created before the Job, because the packaging phase
+ * needs its ClusterIP.
+ */
 export interface PublishObjects {
   deployment: Record<string, unknown>;
-  service: Record<string, unknown>;
   clusterRepo: Record<string, unknown>;
   ingress?: Record<string, unknown>;
 }
@@ -98,11 +102,12 @@ export function sanitizeForName(input: string): string {
 }
 
 /**
- * Assemble the spec the Job reads from /config/build.json.
+ * Assemble the spec the Job reads from /config/build.json, bar the repo URL.
  *
- * `repo.serviceUrl` is baked in at build time rather than discovered later
- * because the packaging phase writes it into every chart's `plugin.endpoint`.
- * That is also why a build's Service name can never change after the fact.
+ * The repo URL is added separately by specWithRepo, once the Service exists and
+ * its ClusterIP is known. It cannot be left until later than that: the
+ * packaging phase writes it into every chart's `plugin.endpoint`, so by the
+ * time the build finishes it is already set in stone.
  */
 export function buildSpecFor(opts: {
   id: string;
@@ -111,13 +116,12 @@ export function buildSpecFor(opts: {
   buildDashboard: boolean;
   dashboardPublicUrl?: string;
   dashboardRouterBase?: string;
-}): BuildSpec {
-  const spec: BuildSpec = {
+}): BuildSpecDraft {
+  const spec: BuildSpecDraft = {
     buildId:        opts.id,
     shell:          opts.shell,
     buildDashboard: opts.buildDashboard,
-    extensions:     opts.extensions,
-    repo:           { serviceUrl: repoServiceUrl(opts.id) }
+    extensions:     opts.extensions
   };
 
   if (opts.buildDashboard) {
@@ -130,6 +134,11 @@ export function buildSpecFor(opts: {
   }
 
   return spec;
+}
+
+/** Complete a draft spec with the repo URL, once the Service has an IP. */
+export function specWithRepo(draft: BuildSpecDraft, clusterIP: string): BuildSpec {
+  return { ...draft, repo: { serviceUrl: repoServiceUrl(clusterIP) } };
 }
 
 export function configMapFor(spec: BuildSpec): Record<string, unknown> {
@@ -306,7 +315,13 @@ export function serviceFor(id: string): Record<string, unknown> {
   };
 }
 
-export function clusterRepoFor(id: string): Record<string, unknown> {
+/**
+ * `serviceUrl` is the one the build was packaged against, read back from its
+ * spec rather than derived again here. The charts this repo serves already
+ * carry that exact string in their `plugin.endpoint`; deriving it a second time
+ * is how a repo and the charts inside it end up pointing at different places.
+ */
+export function clusterRepoFor(id: string, serviceUrl: string): Record<string, unknown> {
   return {
     type:     STEVE_TYPES.CLUSTER_REPO,
     metadata: {
@@ -314,9 +329,8 @@ export function clusterRepoFor(id: string): Record<string, unknown> {
       labels: commonLabels(id, COMPONENT_REPO)
     },
     // Rancher's Helm controller fetches this server-side, so a cluster-internal
-    // Service URL is fine. The trailing slash matters: index.yaml is resolved
-    // against it.
-    spec: { url: `${ repoServiceUrl(id) }/` }
+    // URL is fine. The trailing slash matters: index.yaml is resolved against it.
+    spec: { url: `${ serviceUrl.replace(/\/+$/, '') }/` }
   };
 }
 
@@ -359,12 +373,12 @@ export function ingressFor(id: string, host: string, tlsSecretName?: string): Re
 
 export function publishObjectsFor(
   id: string,
+  serviceUrl: string,
   dashboard?: { host: string; tlsSecretName?: string }
 ): PublishObjects {
   const objects: PublishObjects = {
     deployment:  deploymentFor(id),
-    service:     serviceFor(id),
-    clusterRepo: clusterRepoFor(id)
+    clusterRepo: clusterRepoFor(id, serviceUrl)
   };
 
   if (dashboard?.host) {

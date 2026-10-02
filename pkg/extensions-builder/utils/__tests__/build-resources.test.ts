@@ -1,5 +1,5 @@
 import {
-  BUILDER_IMAGE, BUILD_DEADLINE_SECONDS, LABEL_BUILD_ID, NAMESPACE, NGINX_PORT, buildName, repoName
+  BUILDER_IMAGE, BUILD_DEADLINE_SECONDS, LABEL_BUILD_ID, NGINX_PORT, buildName, repoName
 } from '../../config/builder';
 import { ExtensionSource, ShellSource } from '../../types';
 import {
@@ -15,7 +15,8 @@ import {
   publishObjectsFor,
   pvcFor,
   sanitizeForName,
-  serviceFor
+  serviceFor,
+  specWithRepo
 } from '../build-resources';
 
 const SHELL: ShellSource = {
@@ -26,13 +27,18 @@ const EXTENSION: ExtensionSource = {
   name: 'kubewarden', repo: 'https://github.com/rancher/kubewarden-ui.git', ref: '', pkg: 'kubewarden', official: true
 };
 
-const specFor = (over: Partial<Parameters<typeof buildSpecFor>[0]> = {}) => buildSpecFor({
+/** Whatever Kubernetes happens to allocate; the tests only care that it is used. */
+const CLUSTER_IP = '10.43.1.74';
+
+const draftFor = (over: Partial<Parameters<typeof buildSpecFor>[0]> = {}) => buildSpecFor({
   id:             'pr13579-abcd',
   shell:          SHELL,
   extensions:     [EXTENSION],
   buildDashboard: false,
   ...over
 });
+
+const specFor = (over: Partial<Parameters<typeof buildSpecFor>[0]> = {}) => specWithRepo(draftFor(over), CLUSTER_IP);
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const asAny = (value: unknown): any => value;
@@ -84,18 +90,31 @@ describe('generateBuildId', () => {
 });
 
 describe('buildSpecFor', () => {
-  it('bakes in the repo Service URL, which the packaging phase writes into every chart', () => {
-    expect(specFor().repo.serviceUrl).toBe(`http://${ repoName('pr13579-abcd') }.${ NAMESPACE }.svc:${ NGINX_PORT }`);
+  it('leaves the repo out, because the Service has no IP yet when the form is submitted', () => {
+    expect(draftFor()).not.toHaveProperty('repo');
   });
 
   it('omits the dashboard block when the toggle is off', () => {
-    expect(specFor().dashboard).toBeUndefined();
+    expect(draftFor().dashboard).toBeUndefined();
   });
 
   it('adds the dashboard block, trimming a trailing slash off the public url', () => {
-    const spec = specFor({ buildDashboard: true, dashboardPublicUrl: 'https://builder.example.com/dashboard/' });
+    const spec = draftFor({ buildDashboard: true, dashboardPublicUrl: 'https://builder.example.com/dashboard/' });
 
     expect(spec.dashboard).toEqual({ publicUrl: 'https://builder.example.com/dashboard', routerBase: '/dashboard' });
+  });
+});
+
+describe('specWithRepo', () => {
+  // An IP, not a Service DNS name: Rancher fetches both the ClusterRepo index
+  // and the UIPlugin endpoint itself, and a Rancher running outside the cluster
+  // - which is how every local dev setup runs it - cannot resolve cluster DNS.
+  it('bakes in the repo URL as an IP, which the packaging phase writes into every chart', () => {
+    expect(specFor().repo.serviceUrl).toBe(`http://${ CLUSTER_IP }:${ NGINX_PORT }`);
+  });
+
+  it('leaves the rest of the draft untouched', () => {
+    expect(specWithRepo(draftFor(), CLUSTER_IP)).toMatchObject(draftFor());
   });
 });
 
@@ -218,14 +237,26 @@ describe('serviceFor', () => {
 });
 
 describe('clusterRepoFor', () => {
-  const repo = asAny(clusterRepoFor('pr13579-abcd'));
+  const serviceUrl = `http://${ CLUSTER_IP }:${ NGINX_PORT }`;
+  const repo = asAny(clusterRepoFor('pr13579-abcd', serviceUrl));
 
   it('is cluster scoped - no namespace', () => {
     expect(repo.metadata.namespace).toBeUndefined();
   });
 
   it('ends the url with a slash, because index.yaml is resolved against it', () => {
-    expect(repo.spec.url).toBe(`http://${ repoName('pr13579-abcd') }.${ NAMESPACE }.svc:${ NGINX_PORT }/`);
+    expect(repo.spec.url).toBe(`${ serviceUrl }/`);
+  });
+
+  it('does not double the slash if the url it was given already had one', () => {
+    expect(asAny(clusterRepoFor('pr13579-abcd', `${ serviceUrl }/`)).spec.url).toBe(`${ serviceUrl }/`);
+  });
+
+  // The charts this repo serves carry the packaged URL in plugin.endpoint. If
+  // the repo were to derive its own, the two could disagree and the extension
+  // would install from one place and load from another.
+  it('uses the url it is given rather than deriving one', () => {
+    expect(asAny(clusterRepoFor('pr13579-abcd', 'http://10.43.9.9:8080')).spec.url).toBe('http://10.43.9.9:8080/');
   });
 });
 
@@ -251,12 +282,20 @@ describe('ingressFor', () => {
 });
 
 describe('publishObjectsFor', () => {
+  const serviceUrl = `http://${ CLUSTER_IP }:${ NGINX_PORT }`;
+
   it('leaves out the Ingress when no dashboard host is given', () => {
-    expect(publishObjectsFor('pr13579-abcd').ingress).toBeUndefined();
+    expect(publishObjectsFor('pr13579-abcd', serviceUrl).ingress).toBeUndefined();
   });
 
   it('includes the Ingress when one is', () => {
-    expect(publishObjectsFor('pr13579-abcd', { host: 'builder.example.com' }).ingress).toBeDefined();
+    expect(publishObjectsFor('pr13579-abcd', serviceUrl, { host: 'builder.example.com' }).ingress).toBeDefined();
+  });
+
+  // It is created with the build instead, so the packaging phase can bake its
+  // ClusterIP into the charts.
+  it('does not create the Service', () => {
+    expect(publishObjectsFor('pr13579-abcd', serviceUrl)).not.toHaveProperty('service');
   });
 });
 

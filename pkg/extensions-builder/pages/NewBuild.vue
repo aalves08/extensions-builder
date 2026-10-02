@@ -9,7 +9,9 @@ import { isAdminUser } from '@shell/store/type-map';
 import ExtensionPicker from '../components/ExtensionPicker.vue';
 import PreflightBanners from '../components/PreflightBanners.vue';
 import ShellSourceForm from '../components/ShellSourceForm.vue';
-import { DASHBOARD_REPO, NAMESPACE, ROUTE_BUILDS, buildName } from '../config/builder';
+import {
+  DASHBOARD_BUILD_ENABLED, DASHBOARD_REPO, NAMESPACE, ROUTE_BUILDS, buildName
+} from '../config/builder';
 import { ExtensionSource, PickerRow, PreflightResult, ShellSource } from '../types';
 import {
   createBuild,
@@ -73,6 +75,11 @@ export default defineComponent({
   computed: {
     blocked(): boolean {
       return preflightBlocked(this.preflight);
+    },
+
+    /** Exposed to the template, which cannot see module constants. */
+    dashboardBuildEnabled(): boolean {
+      return DASHBOARD_BUILD_ENABLED;
     },
 
     /**
@@ -196,7 +203,10 @@ export default defineComponent({
       }
 
       this.shell = spec.shell;
-      this.buildDashboard = spec.buildDashboard;
+      // Never restore a toggle the form no longer shows: re-running an older
+      // build would otherwise ask for a dashboard with no way to set its host,
+      // and nothing on screen to explain why submit is disabled.
+      this.buildDashboard = DASHBOARD_BUILD_ENABLED && spec.buildDashboard;
       this.rows = spec.extensions.map((ext) => ({
         ...ext, selected: true, versions: []
       }));
@@ -295,7 +305,15 @@ export default defineComponent({
         />
       </section>
 
-      <section class="panel">
+      <!--
+        Hidden, not removed - see DASHBOARD_BUILD_ENABLED. The whole section
+        goes, because the dashboard toggle is the only thing in it and an empty
+        "Options" panel is worse than none.
+      -->
+      <section
+        v-if="dashboardBuildEnabled"
+        class="panel"
+      >
         <h3>{{ t('extensionsBuilder.new.options.title') }}</h3>
 
         <Checkbox
