@@ -1,0 +1,19 @@
+{
+  "name": "extensions-builder",
+  "description": "Build @rancher/shell and extensions from a rancher/dashboard pull request and serve them as a cluster repository",
+  "version": "0.1.1",
+  "private": false,
+  "rancher": true,
+  "engines": {
+    "node": ">=24"
+  },
+  "devDependencies": {
+    "@vue/cli-plugin-babel": "5.0.9",
+    "@vue/cli-service": "5.0.8",
+    "@vue/cli-plugin-typescript": "5.0.9"
+  },
+  "files": [
+    "**/*"
+  ],
+  "main": "extensions-builder-0.1.1.umd.min.js"
+}

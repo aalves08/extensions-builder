@@ -1,0 +1,24 @@
+apiVersion: v1
+entries:
+  extensions-builder:
+  - annotations:
+      catalog.cattle.io/certified: rancher
+      catalog.cattle.io/namespace: cattle-ui-plugin-system
+      catalog.cattle.io/os: linux
+      catalog.cattle.io/permits-os: linux, windows
+      catalog.cattle.io/rancher-version: '>= 2.12.0'
+      catalog.cattle.io/scope: management
+      catalog.cattle.io/ui-component: plugins
+      catalog.cattle.io/ui-extensions-version: '>= 3.0.0 < 4.0.0'
+    apiVersion: v2
+    appVersion: 0.1.1
+    created: "2026-10-02T14:49:48.526636516Z"
+    description: Build @rancher/shell and extensions from a rancher/dashboard pull
+      request and serve them as a cluster repository
+    digest: d133b8bbc63d6348a2ff3e550f360b4628941427d0ea889826e9457f9ebd0754
+    name: extensions-builder
+    type: application
+    urls:
+    - assets/extensions-builder/extensions-builder-0.1.1.tgz
+    version: 0.1.1
+generated: "2026-10-02T14:49:48.525510316Z"
