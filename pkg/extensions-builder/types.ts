@@ -60,6 +60,8 @@ export interface BuildPhase {
   state: PhaseState;
   startedAt: string | null;
   finishedAt: string | null;
+  /** How long the phase took, once it is over. Reported by the builder. */
+  durationSeconds: number | null;
 }
 
 export interface BuiltPackage {

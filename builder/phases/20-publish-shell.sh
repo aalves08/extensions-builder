@@ -54,30 +54,28 @@ set_pkg_version "${DASHBOARD_DIR}/pkg/rancher-components/package.json" "${SHELL_
 set_pkg_version "${DASHBOARD_DIR}/creators/extension/package.json"     "${SHELL_VERSION}"
 
 # --- Dependencies -------------------------------------------------------------
-log "installing dashboard dependencies (this is the slow one)"
-yarn_registry "${DEFAULT_NPM_REGISTRY}"
-yarn install --frozen-lockfile --ignore-engines
+use_registry "${DEFAULT_NPM_REGISTRY}"
+timed "dashboard yarn install" \
+  yarn install --frozen-lockfile --ignore-engines
 
 # --- Publish ------------------------------------------------------------------
 export NPM_REGISTRY="${VERDACCIO_REGISTRY}"
 export DRY_RUN="false"   # see header - not optional
 
-log "publishing @rancher/shell@${SHELL_VERSION}"
-TAG="shell-pkg-v${SHELL_VERSION}" ./shell/scripts/publish-shell.sh
+timed "publish @rancher/shell@${SHELL_VERSION}" \
+  env TAG="shell-pkg-v${SHELL_VERSION}" ./shell/scripts/publish-shell.sh
 
-log "publishing @rancher/create-extension@${SHELL_VERSION}"
-TAG="creators-pkg-v${SHELL_VERSION}" ./shell/scripts/publish-shell.sh
+timed "publish @rancher/create-extension@${SHELL_VERSION}" \
+  env TAG="creators-pkg-v${SHELL_VERSION}" ./shell/scripts/publish-shell.sh
 
-log "building and publishing @rancher/components@${SHELL_VERSION}"
-yarn build:lib
-npm_registry "${VERDACCIO_REGISTRY}"
-yarn_registry "${VERDACCIO_REGISTRY}"
-yarn publish:lib
+timed "build @rancher/components" yarn build:lib
+
+use_registry "${VERDACCIO_REGISTRY}"
+timed "publish @rancher/components@${SHELL_VERSION}" yarn publish:lib
 
 # Leave the default registry in place for the extension installs that follow;
 # 40-build-extensions.sh flips to Verdaccio only for the shell upgrade itself.
-yarn_registry "${DEFAULT_NPM_REGISTRY}"
-npm_registry "${DEFAULT_NPM_REGISTRY}"
+use_registry "${DEFAULT_NPM_REGISTRY}"
 
 log "verifying the registry serves the published versions"
 for pkg in "@rancher/shell" "@rancher/components"; do

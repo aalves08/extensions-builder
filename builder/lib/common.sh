@@ -28,6 +28,50 @@ log()  { echo "[$(now)] $*"; }
 warn() { echo "[$(now)] WARN: $*" >&2; }
 die()  { echo "[$(now)] ERROR: $*" >&2; exit 1; }
 
+# --- Timing -------------------------------------------------------------------
+#
+# A build is 20-40 minutes of mostly silent yarn and webpack output. Without
+# per-step numbers the only way to answer "what is actually slow here?" is to
+# subtract log timestamps by hand, and there is no way at all once the pod is
+# gone. So every expensive step is timed, every phase reports its own total,
+# and the whole thing is summarised at the end.
+#
+# SECONDS is a bash builtin counting since the shell started. The phases are
+# sourced into this same shell, so it keeps running across all of them - and it
+# costs no subprocess, unlike date(1), which would be called hundreds of times.
+
+# Elapsed seconds, as something readable at a glance.
+hms() {
+  local t="${1:-0}"
+
+  if [ "${t}" -ge 3600 ]; then
+    printf '%dh %02dm %02ds' $(( t / 3600 )) $(( t % 3600 / 60 )) $(( t % 60 ))
+  elif [ "${t}" -ge 60 ]; then
+    printf '%dm %02ds' $(( t / 60 )) $(( t % 60 ))
+  else
+    printf '%ds' "${t}"
+  fi
+}
+
+# Run a command, reporting what it is and how long it took - including when it
+# fails, which is when the number matters most. Returns the command's own exit
+# status, so `timed "..." cmd || die "..."` behaves exactly as `cmd || die` did.
+timed() {
+  local label="$1"; shift
+  local t0="${SECONDS}" rc=0
+
+  log "  > ${label}"
+  "$@" || rc=$?
+
+  if [ "${rc}" -eq 0 ]; then
+    log "  < ${label} - $(hms $(( SECONDS - t0 )))"
+  else
+    log "  < ${label} - FAILED after $(hms $(( SECONDS - t0 ))) (exit ${rc})"
+  fi
+
+  return "${rc}"
+}
+
 # Read a jq expression out of the build spec.
 cfg() { jq -r "$1" "${BUILD_CONFIG}"; }
 
@@ -43,7 +87,9 @@ status_init() {
   local phases_json
   phases_json="$(printf '%s\n' "${PHASE_NAMES[@]}" \
     | jq -R . \
-    | jq -s 'map({ name: ., state: "pending", startedAt: null, finishedAt: null })')"
+    | jq -s 'map({
+        name: ., state: "pending", startedAt: null, finishedAt: null, durationSeconds: null
+      })')"
 
   mkdir -p "${OUT_DIR}"
   jq -n \
@@ -72,8 +118,13 @@ status_init() {
 #
 # status.json is still written, for anyone debugging the volume directly and
 # as the record the packaging phase reads back.
+# When the running phase began, in SECONDS. Set by phase_start, read by
+# phase_ok and phase_fail to work out how long the phase took.
+PHASE_T0=0
+
 phase_start() {
   local name="$1"
+  PHASE_T0="${SECONDS}"
   echo "::phase::${name}::start"
   log "===== phase: ${name} ====="
   status_set "
@@ -84,11 +135,15 @@ phase_start() {
 }
 
 phase_ok() {
-  local name="$1"
-  echo "::phase::${name}::ok"
+  local name="$1" elapsed=$(( SECONDS - PHASE_T0 ))
+  # The duration is a fourth field on the marker. Parsers that only read the
+  # event - including an older UI against a newer image - ignore it.
+  echo "::phase::${name}::ok::${elapsed}"
+  log "===== phase ${name} done in $(hms "${elapsed}") ====="
   status_set "
     (.phases[] | select(.name == \"${name}\") | .state)      = \"success\"
     | (.phases[] | select(.name == \"${name}\") | .finishedAt) = \"$(now)\"
+    | (.phases[] | select(.name == \"${name}\") | .durationSeconds) = ${elapsed}
   "
 }
 
@@ -100,21 +155,52 @@ phase_skip() {
 }
 
 phase_fail() {
-  local name="$1" message="$2" tmp
-  echo "::phase::${name}::fail"
+  local name="$1" message="$2" tmp elapsed=$(( SECONDS - PHASE_T0 ))
+  echo "::phase::${name}::fail::${elapsed}"
+  log "===== phase ${name} FAILED after $(hms "${elapsed}") ====="
   tmp="$(mktemp)"
   jq \
     --arg name "${name}" \
     --arg msg "${message}" \
     --arg ts "$(now)" \
+    --argjson elapsed "${elapsed}" \
     '
       .state      = "failed"
       | .error      = $msg
       | .finishedAt = $ts
       | (.phases[] | select(.name == $name) | .state)      = "failed"
       | (.phases[] | select(.name == $name) | .finishedAt) = $ts
+      | (.phases[] | select(.name == $name) | .durationSeconds) = $elapsed
     ' "${STATUS_FILE}" > "${tmp}"
   mv "${tmp}" "${STATUS_FILE}"
+}
+
+# The table printed at the end of every build, successful or not.
+#
+# Reads back what each phase recorded rather than re-deriving it, so what the
+# log says and what status.json says can never drift apart.
+timing_summary() {
+  local total="$1"
+
+  local name state seconds
+
+  log "===== timing ====="
+  # Tab-separated so the shell can format it; phase names never contain tabs.
+  while IFS=$'\t' read -r name state seconds; do
+    case "${state}" in
+      skipped) log "$(printf '  %-18s %s' "${name}" 'skipped')" ;;
+      *)
+        if [ "${seconds}" = "null" ]; then
+          log "$(printf '  %-18s %s' "${name}" '-')"
+        else
+          log "$(printf '  %-18s %s' "${name}" "$(hms "${seconds}")")"
+        fi
+        ;;
+    esac
+  done < <(jq -r '.phases[] | [.name, .state, (.durationSeconds // "null")] | @tsv' "${STATUS_FILE}")
+
+  log "  ----------------------------------"
+  log "$(printf '  %-18s %s' 'total' "$(hms "${total}")")"
 }
 
 # Switch to the Node version an extension repo pins, if it pins one we don't
@@ -143,8 +229,18 @@ use_node_for_dir() {
   log "now on node $(node -v)"
 }
 
-yarn_registry() { yarn config set registry "$1" >/dev/null; }
-npm_registry()  { npm config set registry "$1" >/dev/null; }
+# Point both package managers at a registry.
+#
+# These have to move together. yarn 1 resolves packages through npm's config,
+# so `registry=` in ~/.npmrc wins over `registry` in .yarnrc - while
+# `yarn config get registry` still reports the yarn one, so the config looks
+# right and isn't. Setting only yarn's made the switch to Verdaccio a silent
+# no-op: `yarn add @rancher/shell@99.99.99` went to npmjs, which has no such
+# version, forty minutes into a build.
+use_registry() {
+  yarn config set registry "$1" >/dev/null
+  npm config set registry "$1" >/dev/null
+}
 
 # Rewrite "version" in a package.json. Same sed the upstream scripts use, so the
 # same set of pre-release suffixes is recognised.

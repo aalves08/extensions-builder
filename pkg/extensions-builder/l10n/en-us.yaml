@@ -58,6 +58,7 @@ extensionsBuilder:
     shell: Shell source
     shellSha: Resolved commit
     shellRef: Resolved ref
+    elapsed: Duration
     packages: Built packages
     publish:
       title: Catalog

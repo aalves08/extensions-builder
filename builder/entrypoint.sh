@@ -21,6 +21,10 @@ on_failure() {
   fi
   log "build failed during '${CURRENT_PHASE:-startup}' (exit ${rc})"
   log "see the log above for the underlying error"
+
+  # A failed build's timings are the interesting ones: they say how much of the
+  # 40 minutes was spent before whatever broke.
+  [ -f "${STATUS_FILE}" ] && timing_summary "${SECONDS}"
 }
 
 run_phase() {
@@ -70,9 +74,18 @@ fi
 run_phase build-extensions /opt/builder/phases/40-build-extensions.sh
 run_phase package          /opt/builder/phases/50-package.sh
 
-status_set ".state = \"success\" | .phase = null | .finishedAt = \"$(now)\""
+BUILD_SECONDS="${SECONDS}"
+
+status_set "
+  .state = \"success\"
+  | .phase = null
+  | .finishedAt = \"$(now)\"
+  | .durationSeconds = ${BUILD_SECONDS}
+"
 
 log "===== build complete ====="
 log "packages:"
 jq -r '.packages[] | "  - \(.name) \(.version)"' "${STATUS_FILE}"
 log "repo served from ${OUT_DIR}"
+
+timing_summary "${BUILD_SECONDS}"

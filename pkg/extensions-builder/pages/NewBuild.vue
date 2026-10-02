@@ -113,12 +113,18 @@ export default defineComponent({
     async runChecks() {
       this.clusters = clusterOptions(this.$store);
 
-      const [storageClasses, hasLocalPath, hasNamespace, hasNginxConfig] = await Promise.all([
+      const [storageClasses, hasNamespace, hasNginxConfig] = await Promise.all([
         listStorageClasses(this.$store),
-        localPathProvisionerPresent(this.$store),
         namespaceExists(this.$store),
         nginxConfigExists(this.$store)
       ]);
+
+      // Only worth asking when there is no StorageClass at all - that is the
+      // one case where the answer decides anything (create a class for a
+      // provisioner already running, or install one first). Asking always
+      // costs two requests and logs a 404 in the console of every healthy
+      // cluster, for a result that is then discarded.
+      const hasLocalPath = !storageClasses.length && await localPathProvisionerPresent(this.$store);
 
       this.preflight = runPreflight({
         isAdmin:               isAdminUser(this.$store.getters),

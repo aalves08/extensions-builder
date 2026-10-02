@@ -27,12 +27,16 @@ for i in $(seq 0 $((EXT_COUNT - 1))); do
 
   log "--- ${name} (${repo}${ref:+ @ ${ref}}, pkg/${pkg}) ---"
 
+  ext_t0="${SECONDS}"
+
   rm -rf "${dir}"
   if [ -n "${ref}" ]; then
-    git clone --filter=blob:none --branch "${ref}" "${repo}" "${dir}" \
+    timed "clone ${name}" \
+      git clone --filter=blob:none --branch "${ref}" "${repo}" "${dir}" \
       || die "could not clone ${repo} at ref '${ref}'"
   else
-    git clone --filter=blob:none "${repo}" "${dir}" \
+    timed "clone ${name}" \
+      git clone --filter=blob:none "${repo}" "${dir}" \
       || die "could not clone ${repo}"
   fi
 
@@ -51,34 +55,41 @@ for i in $(seq 0 $((EXT_COUNT - 1))); do
     sed -i -E 's/("version": "[0-9]+\.[0-9]+\.[0-9]+)-[^"]*"/\1"/' "pkg/${pkg}/package.json"
   fi
 
-  log "installing ${name} dependencies"
-  yarn_registry "${DEFAULT_NPM_REGISTRY}"
+  use_registry "${DEFAULT_NPM_REGISTRY}"
   if [ -f yarn.lock ]; then
-    yarn install --frozen-lockfile --ignore-engines \
+    timed "${name} yarn install" \
+      yarn install --frozen-lockfile --ignore-engines \
       || die "yarn install failed for ${name}"
   else
-    yarn install --ignore-engines || die "yarn install failed for ${name}"
+    timed "${name} yarn install (no lockfile)" \
+      yarn install --ignore-engines \
+      || die "yarn install failed for ${name}"
   fi
 
-  log "swapping in @rancher/shell@${SHELL_VERSION} from the PR build"
-  yarn_registry "${VERDACCIO_REGISTRY}"
+  use_registry "${VERDACCIO_REGISTRY}"
   sed -i -E "s|(\"@rancher/shell\": \")[^\"]+(\")|\1${SHELL_VERSION}\2|" package.json
-  yarn add "@rancher/shell@${SHELL_VERSION}" -W --ignore-engines \
+  timed "${name} swap in @rancher/shell@${SHELL_VERSION} from the PR build" \
+    yarn add "@rancher/shell@${SHELL_VERSION}" -W --ignore-engines \
     || die "could not install @rancher/shell@${SHELL_VERSION} into ${name}"
-  yarn_registry "${DEFAULT_NPM_REGISTRY}"
+  use_registry "${DEFAULT_NPM_REGISTRY}"
 
-  installed="$(jq -r '.dependencies["@rancher/shell"] // .devDependencies["@rancher/shell"] // "?"' package.json)"
+  # From node_modules, not package.json: the sed above rewrote package.json, so
+  # reading it back only ever confirms our own edit. This is the check that
+  # catches the PR build silently not being used at all.
+  installed="$(jq -r '.version' "${dir}/node_modules/@rancher/shell/package.json" 2>/dev/null || echo '?')"
+  [ "${installed}" = "${SHELL_VERSION}" ] \
+    || die "${name} resolved @rancher/shell@${installed}, not ${SHELL_VERSION} - the PR build was not used"
   log "${name} is building against @rancher/shell@${installed}"
 
-  log "building pkg/${pkg}"
-  FORCE_COLOR=0 yarn build-pkg "${pkg}" \
+  timed "${name} build-pkg ${pkg}" \
+    env FORCE_COLOR=0 yarn build-pkg "${pkg}" \
     || die "build-pkg failed for ${name} (pkg/${pkg}) - this is the signal you are looking for"
 
   version="$(jq -r '.version' "pkg/${pkg}/package.json")"
   dist="${dir}/dist-pkg/${pkg}-${version}"
   [ -d "${dist}" ] || die "expected build output at ${dist}, but it is not there"
 
-  log "built ${pkg}-${version}"
+  log "built ${pkg}-${version} - ${name} took $(hms $(( SECONDS - ext_t0 ))) end to end"
 
   # Read out of the pod log by the UI, which cannot reach status.json.
   echo "::package::${pkg}::${version}"

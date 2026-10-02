@@ -9,7 +9,9 @@ import { BuildPhase, BuiltPackage, PhaseState } from '../types';
  * the browser cannot reach. So the phase scripts also echo single-line markers
  * and we reconstruct the state from those:
  *
- *   ::phase::<name>::start|ok|skip|fail
+ *   ::phase::<name>::start
+ *   ::phase::<name>::ok|fail::<elapsed seconds>
+ *   ::phase::<name>::skip
  *   ::shell::<sha>::<ref>
  *   ::package::<pkg>::<version>
  *   ::dashboard::<index url>
@@ -40,8 +42,36 @@ const MARKER_TO_STATE: Record<string, PhaseState> = {
 
 function blankPhases(): BuildPhase[] {
   return PHASES.map((name) => ({
-    name, state: 'pending', startedAt: null, finishedAt: null
+    name, state: 'pending', startedAt: null, finishedAt: null, durationSeconds: null
   }));
+}
+
+/**
+ * Seconds as "1h 02m", "4m 31s", "12s".
+ *
+ * Deliberately not @shell/utils/time's formatters: those are built for
+ * timestamps and relative ages, and a build's phase is neither - it is a
+ * stopwatch reading, and it is the number people compare between runs.
+ */
+export function formatDuration(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined || !isFinite(seconds) || seconds < 0) {
+    return '';
+  }
+
+  const total = Math.round(seconds);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+
+  if (hours) {
+    return `${ hours }h ${ String(minutes).padStart(2, '0') }m`;
+  }
+
+  if (minutes) {
+    return `${ minutes }m ${ String(secs).padStart(2, '0') }s`;
+  }
+
+  return `${ secs }s`;
 }
 
 /**
@@ -83,13 +113,21 @@ export function parseBuildLog(log: string | null | undefined): ParsedLog {
 
     switch (kind) {
     case 'phase': {
-      const [name, event] = parts;
+      const [name, event, elapsed] = parts;
       const phase = result.phases.find((p) => p.name === name);
       const state = MARKER_TO_STATE[event];
 
       if (phase && state) {
         phase.state = state;
         result.currentPhase = state === 'running' ? name : null;
+
+        // Present on ok and fail, absent on start and skip, and absent
+        // entirely from a builder image older than this UI.
+        const seconds = Number(elapsed);
+
+        if (elapsed !== undefined && Number.isFinite(seconds)) {
+          phase.durationSeconds = seconds;
+        }
       }
       break;
     }

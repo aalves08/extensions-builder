@@ -12,7 +12,7 @@ import { STEVE_TYPES } from '../utils/build-resources';
 import {
   fetchBuildLog, findBuildPod, findOrNull, isPublished, openLogWindow, publishBuild, syncClusterRepo
 } from '../utils/api';
-import { parseBuildLog, reconcilePhases } from '../utils/build-log';
+import { formatDuration, parseBuildLog, reconcilePhases } from '../utils/build-log';
 import {
   BlockedReason, isFinished, jobBuildState, jobFailureReason, podBlockedReason, specFromAnnotations, shellSourceLabel
 } from '../utils/build-state';
@@ -70,7 +70,8 @@ export default defineComponent({
       published:      false,
       verify:         null as VerifyResult | null,
       publishError:   null as string | null,
-      pollHandle:     null as ReturnType<typeof setTimeout> | null
+      pollHandle:     null as ReturnType<typeof setTimeout> | null,
+      now:            Date.now()
     };
   },
 
@@ -94,6 +95,33 @@ export default defineComponent({
 
     shellLabel(): string {
       return shellSourceLabel(this.spec);
+    },
+
+    /**
+     * How long the build has been going, or took.
+     *
+     * Measured from the Job's own startTime rather than by summing the phases,
+     * so it includes everything the phases cannot see - scheduling, pulling the
+     * builder image, waiting on the volume. That gap is often where a build
+     * that "takes forever" actually went.
+     */
+    elapsed(): string {
+      const start = this.job?.status?.startTime;
+
+      if (!start) {
+        return '';
+      }
+
+      const startedAt = Date.parse(start);
+
+      if (!Number.isFinite(startedAt)) {
+        return '';
+      }
+
+      const completion = this.job?.status?.completionTime;
+      const endedAt = completion ? Date.parse(completion) : this.now;
+
+      return formatDuration((endedAt - startedAt) / 1000);
     },
 
     canPublish(): boolean {
@@ -213,6 +241,9 @@ export default defineComponent({
         this.dashboardIndex = parsed.dashboardIndex;
         this.lastLine = parsed.lastLine;
         this.loadError = null;
+        // Drives the live elapsed clock. Updated here rather than on its own
+        // timer so the number never disagrees with the phases beside it.
+        this.now = Date.now();
       } catch (e) {
         this.loadError = (e as Error).message;
       } finally {
@@ -354,6 +385,15 @@ export default defineComponent({
 
             <dt>{{ t('extensionsBuilder.detail.shellRef') }}</dt>
             <dd>{{ shellRef || '-' }}</dd>
+
+            <dt>{{ t('extensionsBuilder.detail.elapsed') }}</dt>
+            <dd>
+              <span v-if="elapsed">{{ elapsed }}</span>
+              <span
+                v-else
+                class="text-muted"
+              >&ndash;</span>
+            </dd>
 
             <dt>{{ t('extensionsBuilder.detail.packages') }}</dt>
             <dd>

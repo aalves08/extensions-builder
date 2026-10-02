@@ -30,19 +30,20 @@ log "building dashboard UI"
 log "  router base  : ${ROUTER_BASE_CFG}"
 log "  resource base: ${RESOURCE_BASE_URL}"
 
-ROUTER_BASE="${ROUTER_BASE_CFG}" \
-RESOURCE_BASE="${RESOURCE_BASE_URL}" \
-OUTPUT_DIR="dist" \
-NODE_OPTIONS="--max_old_space_size=4096" \
-  yarn build
+timed "dashboard yarn build" \
+  env ROUTER_BASE="${ROUTER_BASE_CFG}" \
+      RESOURCE_BASE="${RESOURCE_BASE_URL}" \
+      OUTPUT_DIR="dist" \
+      NODE_OPTIONS="--max_old_space_size=4096" \
+      yarn build
 
 [ -f "${DASHBOARD_DIR}/dist/index.html" ] \
   || die "dashboard build produced no dist/index.html"
 
-log "copying dashboard bundle into the repo volume"
 rm -rf "${OUT_DIR}/dashboard"
 mkdir -p "${OUT_DIR}/dashboard"
-cp -R "${DASHBOARD_DIR}/dist/." "${OUT_DIR}/dashboard/"
+timed "copy dashboard bundle into the repo volume" \
+  cp -R "${DASHBOARD_DIR}/dist/." "${OUT_DIR}/dashboard/"
 
 tmp="$(mktemp)"
 jq --arg url "${RESOURCE_BASE_URL}index.html" \

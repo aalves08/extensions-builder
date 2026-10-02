@@ -155,6 +155,9 @@ const isDefault = (sc: StorageClassLike) => {
  * obvious cause - the exact symptom we are trying to remove. So an empty
  * cluster gets the provisioner installed first (`install`) rather than being
  * handed a class that cannot bind.
+ *
+ * `hasLocalPathProvisioner` is only consulted when there are no classes at
+ * all. Callers may skip looking it up otherwise - see NewBuild.runChecks.
  */
 export function storageRemedy(
   storageClasses: StorageClassLike[] | null | undefined,

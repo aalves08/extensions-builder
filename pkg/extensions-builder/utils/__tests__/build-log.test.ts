@@ -110,13 +110,13 @@ describe('parseBuildLog', () => {
 describe('reconcilePhases', () => {
   const running: BuildPhase[] = [
     {
-      name: 'resolve', state: 'success', startedAt: null, finishedAt: null
+      name: 'resolve', state: 'success', startedAt: null, finishedAt: null, durationSeconds: 12
     },
     {
-      name: 'publish-shell', state: 'running', startedAt: null, finishedAt: null
+      name: 'publish-shell', state: 'running', startedAt: null, finishedAt: null, durationSeconds: null
     },
     {
-      name: 'package', state: 'pending', startedAt: null, finishedAt: null
+      name: 'package', state: 'pending', startedAt: null, finishedAt: null, durationSeconds: null
     }
   ];
 

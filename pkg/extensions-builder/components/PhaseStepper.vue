@@ -1,6 +1,7 @@
 <script lang="ts">
 import { defineComponent, PropType } from 'vue';
 import { BuildPhase } from '../types';
+import { formatDuration } from '../utils/build-log';
 import rawTranslations from '../utils/i18n';
 
 /**
@@ -36,6 +37,14 @@ export default defineComponent({
 
     labelFor(name: string): string {
       return this.t(`extensionsBuilder.phases.${ name }`);
+    },
+
+    /**
+     * How long the phase took. Only once it is over - a half-finished number
+     * ticking up next to a spinner says nothing the spinner does not.
+     */
+    durationFor(phase: BuildPhase): string {
+      return formatDuration(phase.durationSeconds);
     }
   }
 });
@@ -54,6 +63,10 @@ export default defineComponent({
         aria-hidden="true"
       />
       <span class="phase__label">{{ labelFor(phase.name) }}</span>
+      <span
+        v-if="durationFor(phase)"
+        class="phase__duration"
+      >{{ durationFor(phase) }}</span>
       <span class="phase__state">{{ t(`extensionsBuilder.phaseState.${ phase.state }`) }}</span>
     </li>
   </ol>
@@ -89,9 +102,18 @@ export default defineComponent({
     flex: 1;
   }
 
+  // Tabular figures so the column of times lines up and can be read down.
+  &__duration {
+    color: var(--muted);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+
   &__state {
     color: var(--muted);
     font-size: 12px;
+    min-width: 62px;
+    text-align: right;
     text-transform: uppercase;
   }
 
