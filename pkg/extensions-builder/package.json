@@ -1,7 +1,7 @@
 {
   "name": "extensions-builder",
   "description": "Build @rancher/shell and extensions from a rancher/dashboard pull request and serve them as a cluster repository",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": false,
   "rancher": {
     "annotations": {
