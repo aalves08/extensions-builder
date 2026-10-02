@@ -114,7 +114,7 @@ extensionsBuilder:
       refOk: '{ref} resolved.'
     extensions:
       title: Extensions
-      description: The official list comes from rancher/ui-plugin-charts. Branch and package name are editable per row, and you can add any git repository of your own.
+      description: The official list comes from rancher/ui-plugin-charts, and each of those rows can be built from any branch or tag. To build anything else, add a git repository of your own.
       manifestFailed: 'Could not load the official extension list: {error}. You can still add repositories by hand.'
       selectAtLeastOne: Select at least one extension to build.
       unnamed: Unnamed extension
@@ -122,12 +122,16 @@ extensionsBuilder:
       edit: Edit
       hide: Hide
       addCustom: Add a repository
+      officialHint: From the official extension list. Its name, package and repository are what make it this extension, so only the branch or tag can be changed.
       name: Name
       nameTooltip: Used for the clone directory and to identify the row. Must be unique within a build.
+      nameLockedTooltip: Comes from the official extension list, and is what the chart and the installed extension are called. To build under a different name, add a repository instead.
       pkg: Package
       pkgTooltip: The folder under pkg/ in that repository. Usually the same as the name.
+      pkgLockedTooltip: Comes from the official extension list. It is the folder under pkg/ that actually gets built, so pointing it elsewhere would build a different extension, or fail because there is nothing there.
       ref: Branch or tag
       refTooltip: Leave empty to build the default branch of the repository. The gh-pages branch listed in the manifest holds published charts, not source, so it is never used here.
+      refPlaceholder: Default branch
       repo: Repository
       repoLockedTooltip: Comes from the official extension list and identifies this extension. To build from somewhere else, add a repository instead.
       errors:

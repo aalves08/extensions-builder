@@ -12,9 +12,14 @@ import rawTranslations from '../utils/i18n';
  * Which extensions to build.
  *
  * The official list is discovery only: it tells you what exists and where the
- * source lives, but every field stays editable, because the whole reason to
- * run this is usually "my branch of kubewarden against this shell PR" rather
- * than the released thing.
+ * source lives. What it does not do is pin you to the released thing - the
+ * whole reason to run this is usually "my branch of kubewarden against this
+ * shell PR", so the branch or tag of an official row is editable.
+ *
+ * Its identity is not. Name, package and repository together are what make the
+ * row that extension, and editing them produces something mislabelled at best
+ * and unbuildable at worst, so they are locked. Build whatever you like from a
+ * repository row instead: those have no identity to protect.
  */
 export default defineComponent({
   name: 'ExtensionPicker',
@@ -174,47 +179,78 @@ export default defineComponent({
             </template>
           </p>
 
+          <!--
+            Two rows, not one: .row is a non-wrapping flex container and .col is
+            flex: 0 0 auto, so a span-12 sitting alongside three span-4s adds up
+            to 200% and hangs off the right edge of the panel rather than
+            wrapping under them.
+          -->
           <div
             v-if="expanded[index]"
-            class="row mt-10"
+            class="editor mt-10"
           >
-            <div class="col span-4">
-              <LabeledInput
-                v-model:value="row.name"
-                :label="t('extensionsBuilder.new.extensions.name')"
-                :tooltip="t('extensionsBuilder.new.extensions.nameTooltip')"
-              />
+            <p
+              v-if="row.official"
+              class="text-muted hint"
+            >
+              {{ t('extensionsBuilder.new.extensions.officialHint') }}
+            </p>
+
+            <div class="row">
+              <div class="col span-4">
+                <LabeledInput
+                  v-model:value="row.name"
+                  :label="t('extensionsBuilder.new.extensions.name')"
+                  :disabled="row.official"
+                  :tooltip="row.official
+                    ? t('extensionsBuilder.new.extensions.nameLockedTooltip')
+                    : t('extensionsBuilder.new.extensions.nameTooltip')"
+                />
+              </div>
+              <div class="col span-4">
+                <LabeledInput
+                  v-model:value="row.pkg"
+                  :label="t('extensionsBuilder.new.extensions.pkg')"
+                  :disabled="row.official"
+                  :tooltip="row.official
+                    ? t('extensionsBuilder.new.extensions.pkgLockedTooltip')
+                    : t('extensionsBuilder.new.extensions.pkgTooltip')"
+                />
+              </div>
+              <div class="col span-4">
+                <LabeledInput
+                  v-model:value="row.ref"
+                  :label="t('extensionsBuilder.new.extensions.ref')"
+                  :tooltip="t('extensionsBuilder.new.extensions.refTooltip')"
+                  :placeholder="t('extensionsBuilder.new.extensions.refPlaceholder')"
+                />
+              </div>
             </div>
-            <div class="col span-4">
-              <LabeledInput
-                v-model:value="row.pkg"
-                :label="t('extensionsBuilder.new.extensions.pkg')"
-                :tooltip="t('extensionsBuilder.new.extensions.pkgTooltip')"
-              />
-            </div>
-            <div class="col span-4">
-              <LabeledInput
-                v-model:value="row.ref"
-                :label="t('extensionsBuilder.new.extensions.ref')"
-                :tooltip="t('extensionsBuilder.new.extensions.refTooltip')"
-                :placeholder="t('extensionsBuilder.new.extensions.refPlaceholder')"
-              />
-            </div>
+
             <!--
-              An official row's repository comes from rancher/ui-plugin-charts
-              and is what makes it that extension. Editing it would leave a row
-              labelled as one extension building another, so it is shown for
-              confirmation only. Add a repository of your own instead - that
-              row's URL is editable, since it is the only thing defining it.
+              An official row's name, package and repository are between them
+              what make it that extension: the repository is where the source
+              comes from, the package is the folder under pkg/ that is actually
+              built, and the name goes on the chart and the installed UIPlugin.
+              Change any of them and you no longer have the extension the row
+              says you have - most likely you have a build that fails, because
+              the package does not exist in that tree. They are shown for
+              confirmation only. The branch or tag stays editable, since
+              building someone's extension from a branch other than their
+              default is the whole point. To build something genuinely
+              different, add a repository instead - nothing about those rows is
+              fixed, so every field is editable.
             -->
-            <div class="col span-12 mt-10">
-              <LabeledInput
-                v-model:value="row.repo"
-                :label="t('extensionsBuilder.new.extensions.repo')"
-                :disabled="row.official"
-                :tooltip="row.official ? t('extensionsBuilder.new.extensions.repoLockedTooltip') : undefined"
-                placeholder="https://github.com/rancher/kubewarden-ui.git"
-              />
+            <div class="row mt-10">
+              <div class="col span-12">
+                <LabeledInput
+                  v-model:value="row.repo"
+                  :label="t('extensionsBuilder.new.extensions.repo')"
+                  :disabled="row.official"
+                  :tooltip="row.official ? t('extensionsBuilder.new.extensions.repoLockedTooltip') : undefined"
+                  placeholder="https://github.com/rancher/kubewarden-ui.git"
+                />
+              </div>
             </div>
           </div>
 
@@ -278,5 +314,10 @@ export default defineComponent({
   font-size: 12px;
   margin: 4px 0 0 24px;
   overflow-wrap: anywhere;
+}
+
+.hint {
+  font-size: 12px;
+  margin: 0 0 10px 0;
 }
 </style>
