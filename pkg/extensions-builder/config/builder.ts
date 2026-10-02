@@ -8,15 +8,27 @@
 export const PRODUCT_NAME = 'extensions-builder';
 
 /**
- * Rancher strips dashes out of a top-level product's name when it builds route
- * names (`plugin-products-top-level.ts`: `prodName.replaceAll('-', '')`), so the
- * routes are `extensionsbuilder-c-cluster-*`, not `extensions-builder-c-cluster-*`.
- * Deriving it rather than hard-coding it keeps the two in step.
+ * What the shell puts in `:cluster` for a product that does not target one.
+ *
+ * Spelled out rather than imported from `@shell/store/store-types`, which does
+ * not exist before 2.15. Importing it would quietly undo the thing index.ts
+ * goes out of its way to achieve.
  */
-export const ROUTE_PRODUCT = PRODUCT_NAME.replace(/-/g, '');
+export const BLANK_CLUSTER = '_';
 
-export const ROUTE_BUILDS = `${ ROUTE_PRODUCT }-c-cluster-builds`;
-export const ROUTE_NEW_BUILD = `${ ROUTE_PRODUCT }-c-cluster-new`;
+/**
+ * Route names. Ours to pick rather than generated, because the product is
+ * registered the old way - see index.ts.
+ *
+ * The shape is the one the shell generates for a top-level product,
+ * `<product>-c-cluster-<page>`. What is not copied is the dash-stripping it
+ * applies to the product name on the way in, which exists only to keep
+ * generated names tidy and is pointless when the name is written out by hand.
+ * So `extensions-builder-c-cluster-builds`, and a URL that reads the same as
+ * the product.
+ */
+export const ROUTE_BUILDS = `${ PRODUCT_NAME }-c-cluster-builds`;
+export const ROUTE_NEW_BUILD = `${ PRODUCT_NAME }-c-cluster-new`;
 
 /** Every build object lives here. Created from the New Build form when missing. */
 export const NAMESPACE = 'cattle-extensions-builder';
