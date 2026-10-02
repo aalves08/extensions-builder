@@ -53,6 +53,19 @@ http {
   uwsgi_temp_path       /tmp/uwsgi_temp;
   scgi_temp_path        /tmp/scgi_temp;
 
+  # index.yaml must never be cached: a rebuild reuses the same URL, and a stale
+  # index is the difference between seeing the new charts and not.
+  #
+  # Keyed off the URI rather than written as a location block, because the same
+  # file is served from two places - at the root for anything inside the
+  # cluster, and under a path prefix for anything outside it - and one rule
+  # that covers both cannot go wrong on only one of them. An empty value adds
+  # no header at all.
+  map $uri $repo_cache_control {
+    default       "";
+    ~index\\.yaml$ "no-store";
+  }
+
   server {
     listen      ${ NGINX_PORT };
     listen      [::]:${ NGINX_PORT };
@@ -63,10 +76,32 @@ http {
     root /srv/repo;
     gzip_static on;
 
-    # index.yaml must never be cached: a rebuild reuses the same URL, and a
-    # stale index is the difference between seeing the new charts and not.
-    location = /index.yaml {
-      add_header Cache-Control "no-store";
+    # Keep the redirect nginx issues for a directory without a trailing slash
+    # relative. Left absolute it is built from this server block, so a request
+    # that arrived through an Ingress on https://rancher.example.com/... is
+    # answered with http://rancher.example.com:8080/..., which resolves to
+    # nothing. Relative, the proxy's own scheme, host and port are kept.
+    absolute_redirect off;
+
+    add_header Cache-Control $repo_cache_control always;
+
+    # The same repository again, under a path prefix.
+    #
+    # Installing a build from another Rancher means reaching it from outside
+    # this cluster, and the only hostname we can count on routing here is the
+    # one Rancher already answers on - so the repo cannot own \`/\` there without
+    # swallowing Rancher's own UI. The build id in the prefix is what routes the
+    # Ingress to this build's Service; by the time the request arrives there is
+    # only one repository to serve, so it is matched and thrown away.
+    #
+    # \`alias\` rather than an ingress rewrite: rewrite-target is an annotation
+    # each ingress controller spells differently, and k3s ships Traefik rather
+    # than ingress-nginx. Doing it here works behind any of them.
+    #
+    # The trailing slash is optional so that a URL pasted into another Rancher's
+    # "Add repository" field works whether or not it was copied with one.
+    location ~ ^/extensions-builder/[^/]+(/(?<repo_path>.*))?$ {
+      alias /srv/repo/$repo_path;
     }
 
     location /dashboard/ {

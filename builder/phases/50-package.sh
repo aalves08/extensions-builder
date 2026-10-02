@@ -26,8 +26,8 @@
 #   plugin/<pkg>-<ver>/files.txt    paths relative to this dir, i.e. "plugin/..."
 #   plugin/<pkg>-<ver>/plugin/...   the built extension
 #
-# ClusterRepo url      -> <serviceUrl>/
-# UIPlugin endpoint    -> <serviceUrl>/plugin/<pkg>-<ver>
+# ClusterRepo url      -> <serviceUrl>/            (or <publicUrl>/ elsewhere)
+# UIPlugin endpoint    -> <endpointBase>/plugin/<pkg>-<ver>
 # ---------------------------------------------------------------------------
 
 set -euo pipefail
@@ -35,6 +35,21 @@ set -euo pipefail
 SERVICE_URL="$(cfg '.repo.serviceUrl')"
 [ -n "${SERVICE_URL}" ] || die "spec is missing .repo.serviceUrl"
 SERVICE_URL="${SERVICE_URL%/}"
+
+# Set when the build is meant to be installable from a Rancher other than the
+# one that started it.
+#
+# A chart carries exactly one plugin.endpoint, so when both addresses exist one
+# of them has to win, and it has to be this one: the Service address is a
+# ClusterIP, reachable from this cluster and from nowhere else, so a chart
+# baked against it is useless to every Rancher that is not this one. The public
+# URL is this Rancher's own ingress hostname, which this Rancher can also reach,
+# so nothing is lost locally by preferring it.
+PUBLIC_URL="$(cfg '.repo.publicUrl // ""')"
+PUBLIC_URL="${PUBLIC_URL%/}"
+
+ENDPOINT_BASE="${PUBLIC_URL:-${SERVICE_URL}}"
+log "chart endpoints will point at ${ENDPOINT_BASE}"
 
 STAGE="${WORK_DIR}/stage"
 rm -rf "${STAGE}"
@@ -50,7 +65,7 @@ for i in $(seq 0 $((PKG_COUNT - 1))); do
   source_dir="$(jq -r ".packages[${i}].source" "${STATUS_FILE}")"
 
   pkg_json="${source_dir}/pkg/${pkg}/package.json"
-  endpoint="${SERVICE_URL}/plugin/${pkg}-${version}"
+  endpoint="${ENDPOINT_BASE}/plugin/${pkg}-${version}"
 
   log "--- packaging ${pkg}-${version} ---"
 

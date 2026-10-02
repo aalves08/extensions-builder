@@ -10,7 +10,7 @@ const ALL_GOOD: PreflightInput = {
   defaultStorageClasses: 1,
   storage:               { kind: 'ok' },
   namespaceExists:       true,
-  nginxConfigExists:     true
+  nginxConfigCurrent:    true
 };
 
 const resultFor = (input: Partial<PreflightInput>, id: string) => runPreflight({ ...ALL_GOOD, ...input })
@@ -27,7 +27,7 @@ describe('runPreflight', () => {
   it.each([
     [{ isAdmin: false }, 'admin'],
     [{ namespaceExists: false }, 'namespace'],
-    [{ nginxConfigExists: false }, 'nginxConfig'],
+    [{ nginxConfigCurrent: false }, 'nginxConfig'],
     [{ hasJobSchema: false }, 'jobSchema'],
     [{ hasClusterRepoSchema: false }, 'clusterRepoSchema'],
     [{ defaultStorageClasses: 0, storage: { kind: 'manual' as const } }, 'storageClass']
@@ -47,14 +47,14 @@ describe('runPreflight', () => {
 describe('runPreflight fixability', () => {
   it.each([
     [{ namespaceExists: false }, 'namespace', 'namespace'],
-    [{ nginxConfigExists: false }, 'nginxConfig', 'nginxConfig']
+    [{ nginxConfigCurrent: false }, 'nginxConfig', 'nginxConfig']
   ])('offers to fix %o', (input, id, remedy) => {
     expect(resultFor(input, id)?.fixable).toBe(remedy);
   });
 
   it.each([
     [{ namespaceExists: false }, 'namespace'],
-    [{ nginxConfigExists: false }, 'nginxConfig']
+    [{ nginxConfigCurrent: false }, 'nginxConfig']
   ])('does not offer %o to a non-admin, who could not carry it out', (input, id) => {
     expect(resultFor({ ...input, isAdmin: false }, id)?.fixable).toBeUndefined();
   });

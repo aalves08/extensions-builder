@@ -28,8 +28,11 @@ export interface PreflightInput {
   storage: StorageRemedy;
   /** The namespace every build object goes in. */
   namespaceExists: boolean;
-  /** The nginx config the repo Deployment mounts when a build is published. */
-  nginxConfigExists: boolean;
+  /**
+   * The nginx config the repo Deployment mounts when a build is published, and
+   * whether it is still the one this extension ships.
+   */
+  nginxConfigCurrent: boolean;
 }
 
 function storageCheck(input: PreflightInput): PreflightResult {
@@ -96,7 +99,7 @@ export function runPreflight(input: PreflightInput): PreflightResult[] {
     },
     {
       id:          'nginxConfig',
-      ok:          input.nginxConfigExists,
+      ok:          input.nginxConfigCurrent,
       warningOnly: false,
       messageKey:  'extensionsBuilder.preflight.nginxConfig',
       messageArgs: { namespace: NAMESPACE },

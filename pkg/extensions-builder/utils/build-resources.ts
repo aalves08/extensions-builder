@@ -19,9 +19,13 @@ import {
   WORK_VOLUME_SIZE,
   buildName,
   repoName,
+  repoPublicPath,
+  repoPublicUrl,
   repoServiceUrl
 } from '../config/builder';
-import { BuildSpec, BuildSpecDraft, ExtensionSource, ShellSource } from '../types';
+import {
+  BuildSpec, BuildSpecDraft, ExtensionSource, ExternalAccess, ShellSource
+} from '../types';
 
 /**
  * Every Kubernetes object a build is made of, as plain data.
@@ -116,6 +120,7 @@ export function buildSpecFor(opts: {
   buildDashboard: boolean;
   dashboardPublicUrl?: string;
   dashboardRouterBase?: string;
+  external?: ExternalAccess | null;
 }): BuildSpecDraft {
   const spec: BuildSpecDraft = {
     buildId:        opts.id,
@@ -123,6 +128,17 @@ export function buildSpecFor(opts: {
     buildDashboard: opts.buildDashboard,
     extensions:     opts.extensions
   };
+
+  // Like the dashboard URL below, this is a build-time input and not a publish
+  // -time one: the packaging phase turns it into every chart's plugin.endpoint,
+  // and a chart cannot be re-pointed after it has been packaged.
+  if (opts.external?.host) {
+    spec.external = {
+      host: opts.external.host.trim(),
+      tls:  opts.external.tls,
+      ...(opts.external.tlsSecretName ? { tlsSecretName: opts.external.tlsSecretName.trim() } : {})
+    };
+  }
 
   if (opts.buildDashboard) {
     spec.dashboard = {
@@ -136,9 +152,26 @@ export function buildSpecFor(opts: {
   return spec;
 }
 
-/** Complete a draft spec with the repo URL, once the Service has an IP. */
+/**
+ * Complete a draft spec with the repo URLs, once the Service has an IP.
+ *
+ * Two URLs for one directory of files. The Service address is what this
+ * Rancher uses and is the proven path, so it stays the ClusterRepo's url on a
+ * local publish. The public one is only present when the build was asked for
+ * externally, and it is the one baked into the charts - a chart carries a
+ * single endpoint, and the Rancher that most needs it to be right is the one
+ * that cannot reach a ClusterIP.
+ */
 export function specWithRepo(draft: BuildSpecDraft, clusterIP: string): BuildSpec {
-  return { ...draft, repo: { serviceUrl: repoServiceUrl(clusterIP) } };
+  const publicUrl = draft.external?.host ? repoPublicUrl(draft.external.host, draft.external.tls, draft.buildId) : '';
+
+  return {
+    ...draft,
+    repo: {
+      serviceUrl: repoServiceUrl(clusterIP),
+      ...(publicUrl ? { publicUrl } : {})
+    }
+  };
 }
 
 export function configMapFor(spec: BuildSpec): Record<string, unknown> {
@@ -334,15 +367,50 @@ export function clusterRepoFor(id: string, serviceUrl: string): Record<string, u
   };
 }
 
+/** One hostname and path the build should answer on from outside the cluster. */
+export interface IngressRoute {
+  host: string;
+  /** Prefix path, no trailing slash. */
+  path: string;
+}
+
 /**
- * Ingress for the dashboard bundle, and only for that.
+ * Ingress for the parts of a build that are fetched from outside the cluster.
  *
- * Everything else a build serves is fetched by Rancher itself and never leaves
- * the cluster network. The dashboard bundle is the exception: the browser loads
- * it directly, so it needs a route in from outside.
+ * Most of what a build serves never leaves the cluster network: this Rancher
+ * fetches the repository index server-side and proxies extension assets through
+ * /v1/uiplugins. Two things do need a route in, and both are about somebody
+ * else doing the fetching - the dashboard bundle, which the browser loads
+ * directly, and the repository itself when another Rancher is going to install
+ * from it.
+ *
+ * Returns null when there is nothing to expose, so the caller does not have to
+ * ask twice.
  */
-export function ingressFor(id: string, host: string, tlsSecretName?: string): Record<string, unknown> {
+export function ingressFor(id: string, routes: IngressRoute[], tlsSecretName?: string): Record<string, unknown> | null {
   const name = repoName(id);
+  const byHost = new Map<string, string[]>();
+
+  for (const route of routes || []) {
+    const host = (route?.host || '').trim();
+
+    if (!host || !route.path) {
+      continue;
+    }
+
+    const paths = byHost.get(host) || [];
+
+    if (!paths.includes(route.path)) {
+      paths.push(route.path);
+    }
+
+    byHost.set(host, paths);
+  }
+
+  if (!byHost.size) {
+    return null;
+  }
+
   const ingress: Record<string, unknown> = {
     type:     STEVE_TYPES.INGRESS,
     metadata: {
@@ -351,21 +419,26 @@ export function ingressFor(id: string, host: string, tlsSecretName?: string): Re
       labels:    commonLabels(id, COMPONENT_REPO)
     },
     spec: {
-      rules: [{
+      rules: [...byHost.entries()].map(([host, paths]) => ({
         host,
         http: {
-          paths: [{
-            path:     '/dashboard',
+          paths: paths.map((path) => ({
+            path,
             pathType: 'Prefix',
             backend:  { service: { name, port: { number: NGINX_PORT } } }
-          }]
+          }))
         }
-      }]
+      }))
     }
   };
 
+  // Optional on purpose. The usual host here is the one Rancher already answers
+  // on, which means a certificate for it is already loaded and the ingress
+  // controller will serve our paths under it without being told twice. Naming a
+  // secret is for the case where that is not true - and it has to live in this
+  // namespace, which Rancher's own TLS secret does not.
   if (tlsSecretName) {
-    (ingress.spec as Record<string, unknown>).tls = [{ hosts: [host], secretName: tlsSecretName }];
+    (ingress.spec as Record<string, unknown>).tls = [{ hosts: [...byHost.keys()], secretName: tlsSecretName }];
   }
 
   return ingress;
@@ -374,15 +447,30 @@ export function ingressFor(id: string, host: string, tlsSecretName?: string): Re
 export function publishObjectsFor(
   id: string,
   serviceUrl: string,
-  dashboard?: { host: string; tlsSecretName?: string }
+  options: {
+    external?: ExternalAccess | null;
+    dashboard?: { host: string; tlsSecretName?: string } | null;
+  } = {}
 ): PublishObjects {
   const objects: PublishObjects = {
     deployment:  deploymentFor(id),
     clusterRepo: clusterRepoFor(id, serviceUrl)
   };
 
-  if (dashboard?.host) {
-    objects.ingress = ingressFor(id, dashboard.host, dashboard.tlsSecretName);
+  const routes: IngressRoute[] = [];
+
+  if (options.external?.host) {
+    routes.push({ host: options.external.host, path: repoPublicPath(id) });
+  }
+
+  if (options.dashboard?.host) {
+    routes.push({ host: options.dashboard.host, path: '/dashboard' });
+  }
+
+  const ingress = ingressFor(id, routes, options.external?.tlsSecretName || options.dashboard?.tlsSecretName);
+
+  if (ingress) {
+    objects.ingress = ingress;
   }
 
   return objects;

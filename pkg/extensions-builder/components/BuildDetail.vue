@@ -145,23 +145,21 @@ export default defineComponent({
       };
     },
 
-    /** The Ingress host for the dashboard bundle, taken from the baked-in URL. */
-    dashboardHost(): string {
-      const url = this.spec?.dashboard?.publicUrl;
-
-      if (!url) {
-        return '';
-      }
-
-      try {
-        return new URL(url).host;
-      } catch {
-        return '';
-      }
+    /**
+     * Where another Rancher can reach this build's repository, or '' when the
+     * build was not set up for it.
+     *
+     * Read off the spec rather than worked out here. It was fixed before the
+     * build started - it is already inside every chart this repository serves -
+     * so the only honest source for it is the spec the build ran with.
+     */
+    externalUrl(): string {
+      return this.spec?.repo?.publicUrl || '';
     },
 
-    dashboardTls(): boolean {
-      return (this.spec?.dashboard?.publicUrl || '').startsWith('https://');
+    /** The repository URL as Rancher's "Add repository" form wants it. */
+    externalIndexUrl(): string {
+      return this.externalUrl ? `${ this.externalUrl }/` : '';
     },
 
     backLocation() {
@@ -268,7 +266,7 @@ export default defineComponent({
 
       try {
         if (!this.published) {
-          await publishBuild(this.$store, this.buildId, this.dashboardHost ? { dashboardHost: this.dashboardHost } : {});
+          await publishBuild(this.$store, this.buildId);
           this.published = true;
         }
 
@@ -464,6 +462,52 @@ export default defineComponent({
         </template>
       </section>
 
+      <section
+        v-if="finished && state !== 'failed'"
+        class="panel"
+      >
+        <h3>{{ t('extensionsBuilder.detail.external.title') }}</h3>
+        <p class="text-muted mb-20">
+          {{ t('extensionsBuilder.detail.external.description') }}
+        </p>
+
+        <p
+          v-if="!externalUrl"
+          class="text-muted"
+        >
+          {{ t('extensionsBuilder.detail.external.none') }}
+        </p>
+
+        <template v-else>
+          <div class="external-url">
+            <code>{{ externalIndexUrl }}</code>
+            <CopyToClipboard
+              :text="externalIndexUrl"
+              :show-label="false"
+              action-color="role-link"
+            />
+          </div>
+
+          <Banner
+            v-if="!published"
+            color="info"
+            :label="t('extensionsBuilder.detail.external.notPublished')"
+          />
+
+          <h4>{{ t('extensionsBuilder.detail.external.stepsTitle') }}</h4>
+          <ol class="steps">
+            <li>{{ t('extensionsBuilder.detail.external.step1') }}</li>
+            <li>{{ t('extensionsBuilder.detail.external.step2') }}</li>
+            <li>{{ t('extensionsBuilder.detail.external.step3') }}</li>
+            <li>{{ t('extensionsBuilder.detail.external.step4') }}</li>
+          </ol>
+
+          <p class="text-muted hint">
+            {{ t('extensionsBuilder.detail.external.caveat') }}
+          </p>
+        </template>
+      </section>
+
       <HostUiCard
         v-if="spec && spec.buildDashboard"
         :build-id="buildId"
@@ -540,6 +584,32 @@ export default defineComponent({
   display: flex;
   gap: 8px;
   margin-top: 12px;
+}
+
+.external-url {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  margin: 12px 0;
+
+  code {
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+}
+
+.steps {
+  margin: 0;
+  padding-left: 20px;
+
+  li {
+    margin-bottom: 4px;
+  }
+}
+
+.hint {
+  font-size: 12px;
+  margin: 12px 0 0 0;
 }
 
 // Kubernetes' own words, verbatim. Monospace so an image reference in it is

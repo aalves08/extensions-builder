@@ -116,6 +116,18 @@ describe('specWithRepo', () => {
   it('leaves the rest of the draft untouched', () => {
     expect(specWithRepo(draftFor(), CLUSTER_IP)).toMatchObject(draftFor());
   });
+
+  it('adds no public url for a local-only build', () => {
+    expect(specFor().repo.publicUrl).toBeUndefined();
+  });
+
+  // The charts are baked against this, so it has to be the full per-build base
+  // and not just the hostname.
+  it('derives the public url from the external access and the build id', () => {
+    const spec = specFor({ external: { host: 'rancher.example.com', tls: true } });
+
+    expect(spec.repo.publicUrl).toBe('https://rancher.example.com/extensions-builder/pr13579-abcd');
+  });
 });
 
 describe('configMapFor', () => {
@@ -261,8 +273,10 @@ describe('clusterRepoFor', () => {
 });
 
 describe('ingressFor', () => {
-  it('routes only /dashboard, which is the one thing the browser fetches directly', () => {
-    const ingress = asAny(ingressFor('pr13579-abcd', 'builder.example.com'));
+  const dashboard = [{ host: 'builder.example.com', path: '/dashboard' }];
+
+  it('routes the paths it is given to this build\'s repo service', () => {
+    const ingress = asAny(ingressFor('pr13579-abcd', dashboard));
     const path = ingress.spec.rules[0].http.paths[0];
 
     expect(ingress.spec.rules[0].host).toBe('builder.example.com');
@@ -270,12 +284,31 @@ describe('ingressFor', () => {
     expect(path.backend.service.name).toBe(repoName('pr13579-abcd'));
   });
 
+  it('is null when there is nothing to expose', () => {
+    expect(ingressFor('pr13579-abcd', [])).toBeNull();
+    expect(ingressFor('pr13579-abcd', [{ host: '  ', path: '/dashboard' }])).toBeNull();
+  });
+
+  // Two things can need a route in at once, and they are usually on the same
+  // host. One rule with two paths, not two Ingresses fighting over the host.
+  it('groups paths that share a host into one rule', () => {
+    const ingress = asAny(ingressFor('pr13579-abcd', [
+      { host: 'rancher.example.com', path: '/extensions-builder/pr13579-abcd' },
+      { host: 'rancher.example.com', path: '/dashboard' }
+    ]));
+
+    expect(ingress.spec.rules).toHaveLength(1);
+    expect(ingress.spec.rules[0].http.paths.map((p: { path: string }) => p.path)).toEqual([
+      '/extensions-builder/pr13579-abcd', '/dashboard'
+    ]);
+  });
+
   it('has no tls block unless a secret was given', () => {
-    expect(asAny(ingressFor('pr13579-abcd', 'builder.example.com')).spec.tls).toBeUndefined();
+    expect(asAny(ingressFor('pr13579-abcd', dashboard)).spec.tls).toBeUndefined();
   });
 
   it('adds tls for the same host when a secret is given', () => {
-    const ingress = asAny(ingressFor('pr13579-abcd', 'builder.example.com', 'builder-tls'));
+    const ingress = asAny(ingressFor('pr13579-abcd', dashboard, 'builder-tls'));
 
     expect(ingress.spec.tls).toEqual([{ hosts: ['builder.example.com'], secretName: 'builder-tls' }]);
   });
@@ -284,12 +317,21 @@ describe('ingressFor', () => {
 describe('publishObjectsFor', () => {
   const serviceUrl = `http://${ CLUSTER_IP }:${ NGINX_PORT }`;
 
-  it('leaves out the Ingress when no dashboard host is given', () => {
+  it('leaves out the Ingress when nothing has to be reachable from outside', () => {
     expect(publishObjectsFor('pr13579-abcd', serviceUrl).ingress).toBeUndefined();
   });
 
-  it('includes the Ingress when one is', () => {
-    expect(publishObjectsFor('pr13579-abcd', serviceUrl, { host: 'builder.example.com' }).ingress).toBeDefined();
+  it('includes the Ingress for a dashboard host', () => {
+    expect(publishObjectsFor('pr13579-abcd', serviceUrl, { dashboard: { host: 'builder.example.com' } }).ingress).toBeDefined();
+  });
+
+  // The path has to carry the build id: several builds share the one hostname
+  // Rancher answers on, and the prefix is the only thing telling them apart.
+  it('routes the repo under its own build-id path when external access is on', () => {
+    const ingress = asAny(publishObjectsFor('pr13579-abcd', serviceUrl, { external: { host: 'rancher.example.com', tls: true } }).ingress);
+
+    expect(ingress.spec.rules[0].host).toBe('rancher.example.com');
+    expect(ingress.spec.rules[0].http.paths[0].path).toBe('/extensions-builder/pr13579-abcd');
   });
 
   // It is created with the build instead, so the packaging phase can bake its

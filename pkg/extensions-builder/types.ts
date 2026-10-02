@@ -35,6 +35,22 @@ export interface ExtensionSource {
   official: boolean;
 }
 
+/**
+ * How a build's repository is reached from outside the cluster.
+ *
+ * Set when the build should be installable from a Rancher other than this one.
+ * It has to be decided before the build starts, not at publish time: the
+ * packaging phase writes the resulting URL into every chart's plugin.endpoint,
+ * and whichever Rancher installs that chart fetches the extension from there.
+ */
+export interface ExternalAccess {
+  /** Hostname that already routes to this cluster's ingress controller. */
+  host: string;
+  tls: boolean;
+  /** Only needed when the host has no certificate served for it already. */
+  tlsSecretName?: string;
+}
+
 /** Written to the ConfigMap as /config/build.json. */
 export interface BuildSpec {
   buildId: string;
@@ -46,10 +62,16 @@ export interface BuildSpec {
     /** Becomes ROUTER_BASE. */
     routerBase: string;
   };
+  external?: ExternalAccess;
   extensions: ExtensionSource[];
   repo: {
     /** Cluster-internal base URL of the repo Service, no trailing slash. */
     serviceUrl: string;
+    /**
+     * Externally reachable base URL of the same repository, no trailing slash.
+     * Derived from `external`. Absent when the build is local-only.
+     */
+    publicUrl?: string;
   };
 }
 

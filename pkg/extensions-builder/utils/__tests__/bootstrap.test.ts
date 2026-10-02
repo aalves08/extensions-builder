@@ -55,7 +55,15 @@ describe('nginxConfigMapObject', () => {
   });
 
   it('never caches index.yaml, because a rebuild reuses the same url', () => {
-    expect(NGINX_CONF).toContain('add_header Cache-Control "no-store";');
+    expect(NGINX_CONF).toContain('~index\\.yaml$ "no-store";');
+    expect(NGINX_CONF).toContain('add_header Cache-Control $repo_cache_control always;');
+  });
+
+  // The same files, reachable a second way, so another Rancher can install
+  // from a build without the repo having to own `/` on Rancher's own hostname.
+  it('serves the repo under a build-id path prefix as well as at the root', () => {
+    expect(NGINX_CONF).toContain('location ~ ^/extensions-builder/[^/]+(/(?<repo_path>.*))?$ {');
+    expect(NGINX_CONF).toContain('alias /srv/repo/$repo_path;');
   });
 });
 

@@ -10,9 +10,11 @@ import ExtensionPicker from '../components/ExtensionPicker.vue';
 import PreflightBanners from '../components/PreflightBanners.vue';
 import ShellSourceForm from '../components/ShellSourceForm.vue';
 import {
-  DASHBOARD_BUILD_ENABLED, DASHBOARD_REPO, NAMESPACE, ROUTE_BUILDS, buildName
+  DASHBOARD_BUILD_ENABLED, DASHBOARD_REPO, NAMESPACE, ROUTE_BUILDS, buildName, repoPublicUrl
 } from '../config/builder';
-import { ExtensionSource, PickerRow, PreflightResult, ShellSource } from '../types';
+import {
+  ExtensionSource, ExternalAccess, PickerRow, PreflightResult, ShellSource
+} from '../types';
 import {
   createBuild,
   ensureDefaultStorageClass,
@@ -22,10 +24,11 @@ import {
   listStorageClasses,
   localPathProvisionerPresent,
   namespaceExists,
-  nginxConfigExists,
+  nginxConfigCurrent,
   schemaFor
 } from '../utils/api';
 import { STEVE_TYPES, buildSpecFor, dashboardPublicUrl, generateBuildId } from '../utils/build-resources';
+import { ExternalAccessReason, defaultExternalAccess } from '../utils/server-url';
 import { storageRemedy } from '../utils/bootstrap';
 import { ClusterOption, clusterOptions } from '../utils/clusters';
 import { LOCAL_CLUSTER } from '../utils/steve-proxy';
@@ -63,6 +66,13 @@ export default defineComponent({
       buildDashboard:  false,
       dashboardHost:   '',
       dashboardTls:    true,
+      /** Off until we find an address worth offering - see prefillExternal. */
+      externalEnabled: false,
+      external:        {
+        host: '', tls: true, tlsSecretName: ''
+      } as ExternalAccess,
+      /** Why external access is not on offer at all, when it is not. */
+      externalBlocked: null as { reason: ExternalAccessReason; address: string } | null,
       preflight:       [] as PreflightResult[],
       submitError:     null as string | null,
       fixError:        null as string | null,
@@ -90,8 +100,37 @@ export default defineComponent({
       return !this.buildDashboard || !!this.dashboardHost.trim();
     },
 
+    externalValid(): boolean {
+      return !this.externalEnabled || !!this.external.host.trim();
+    },
+
+    /** Why the option is unavailable, in words, or '' when it is available. */
+    externalBlockedMessage(): string {
+      if (!this.externalBlocked) {
+        return '';
+      }
+
+      return this.t(
+        `extensionsBuilder.new.external.blocked.${ this.externalBlocked.reason }`,
+        { address: this.externalBlocked.address }
+      );
+    },
+
+    /** What the build's repository will be reachable at, if anything. */
+    externalAccess(): ExternalAccess | null {
+      return this.externalEnabled && this.external.host.trim() ? this.external : null;
+    },
+
+    /**
+     * The URL with the build id still to come. There is no id until submit,
+     * and the shape of the URL is the part worth checking beforehand.
+     */
+    externalUrlPreview(): string {
+      return this.externalAccess ? repoPublicUrl(this.external.host, this.external.tls, '<build id>') : '';
+    },
+
     canSubmit(): boolean {
-      return !this.blocked && this.shellValid && this.extensionsValid && this.dashboardValid;
+      return !this.blocked && this.shellValid && this.extensionsValid && this.dashboardValid && this.externalValid;
     },
 
     publicUrl(): string {
@@ -112,7 +151,10 @@ export default defineComponent({
   },
 
   async mounted() {
-    await Promise.all([this.runChecks(), this.prefillFrom()]);
+    await Promise.all([this.runChecks(), this.prefillExternal()]);
+    // After, not alongside: re-running a build should reproduce the addresses
+    // it was built with, not whatever this Rancher would suggest today.
+    await this.prefillFrom();
     this.loading = false;
   },
 
@@ -123,7 +165,7 @@ export default defineComponent({
       const [storageClasses, hasNamespace, hasNginxConfig] = await Promise.all([
         listStorageClasses(this.$store),
         namespaceExists(this.$store),
-        nginxConfigExists(this.$store)
+        nginxConfigCurrent(this.$store)
       ]);
 
       // Only worth asking when there is no StorageClass at all - that is the
@@ -140,8 +182,34 @@ export default defineComponent({
         defaultStorageClasses: countDefaultStorageClasses(storageClasses),
         storage:               storageRemedy(storageClasses, hasLocalPath),
         namespaceExists:       hasNamespace,
-        nginxConfigExists:     hasNginxConfig
+        nginxConfigCurrent:    hasNginxConfig
       });
+    },
+
+    /**
+     * Fill the external access fields in from the address this Rancher answers
+     * on, or explain why there is no such address.
+     *
+     * Only ever a starting point, so the fields stay editable - `server-url`
+     * routes here by definition, but a Rancher run straight from a container
+     * publishes a port rather than going through an ingress, and there the
+     * hostname is right and the route does not exist. When nothing qualifies
+     * the option is turned off and locked: this is a fact about where Rancher
+     * is running and not something a different value in the box would fix, and
+     * an address that cannot work is worse than no address at all once it has
+     * been baked into the charts.
+     */
+    async prefillExternal() {
+      const suggestion = await defaultExternalAccess(this.$store);
+
+      if (!suggestion.access) {
+        this.externalBlocked = { reason: suggestion.reason, address: suggestion.address };
+
+        return;
+      }
+
+      this.external = { ...suggestion.access, tlsSecretName: '' };
+      this.externalEnabled = true;
     },
 
     /**
@@ -211,6 +279,14 @@ export default defineComponent({
         ...ext, selected: true, versions: []
       }));
 
+      if (spec.external?.host) {
+        this.external = { tlsSecretName: '', ...spec.external };
+        this.externalEnabled = true;
+        // Whatever this Rancher would suggest today, an address that was good
+        // enough to build against once is not ours to withdraw on a re-run.
+        this.externalBlocked = null;
+      }
+
       if (spec.dashboard?.publicUrl) {
         try {
           const url = new URL(spec.dashboard.publicUrl);
@@ -234,7 +310,8 @@ export default defineComponent({
           shell:              this.shell,
           extensions:         this.selectedExtensions,
           buildDashboard:     this.buildDashboard,
-          dashboardPublicUrl: this.publicUrl
+          dashboardPublicUrl: this.publicUrl,
+          external:           this.externalAccess
         });
 
         await createBuild(this.$store, spec);
@@ -303,6 +380,69 @@ export default defineComponent({
           v-model="rows"
           @validity="extensionsValid = $event"
         />
+      </section>
+
+      <section class="panel">
+        <h3>{{ t('extensionsBuilder.new.external.title') }}</h3>
+        <p class="text-muted mb-20">
+          {{ t('extensionsBuilder.new.external.description') }}
+        </p>
+
+        <Banner
+          v-if="externalBlockedMessage"
+          color="warning"
+          :label="externalBlockedMessage"
+        />
+
+        <Checkbox
+          v-model:value="externalEnabled"
+          :disabled="!!externalBlocked"
+          :label="t('extensionsBuilder.new.external.enable')"
+          :tooltip="t('extensionsBuilder.new.external.enableTooltip')"
+        />
+
+        <template v-if="externalEnabled">
+          <div class="row mt-10">
+            <div class="col span-8">
+              <LabeledInput
+                v-model:value="external.host"
+                :label="t('extensionsBuilder.new.external.host')"
+                :tooltip="t('extensionsBuilder.new.external.hostTooltip')"
+                :required="true"
+                placeholder="rancher.example.com"
+              />
+            </div>
+            <div class="col span-4 tls-col">
+              <Checkbox
+                v-model:value="external.tls"
+                :label="t('extensionsBuilder.new.external.tls')"
+              />
+            </div>
+          </div>
+
+          <div class="row mt-10">
+            <div class="col span-8">
+              <LabeledInput
+                v-model:value="external.tlsSecretName"
+                :label="t('extensionsBuilder.new.external.tlsSecret')"
+                :tooltip="t('extensionsBuilder.new.external.tlsSecretTooltip')"
+                :placeholder="t('extensionsBuilder.new.external.tlsSecretPlaceholder')"
+              />
+            </div>
+          </div>
+
+          <p
+            v-if="externalUrlPreview"
+            class="text-muted hint"
+          >
+            {{ t('extensionsBuilder.new.external.resolvedUrl', { url: externalUrlPreview }) }}
+          </p>
+
+          <Banner
+            color="info"
+            :label="t('extensionsBuilder.new.external.note')"
+          />
+        </template>
       </section>
 
       <!--

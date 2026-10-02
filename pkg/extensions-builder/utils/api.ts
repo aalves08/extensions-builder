@@ -17,6 +17,7 @@ import {
 import {
   DEFAULT_CLASS_ANNOTATION,
   LOCAL_PATH_CLASS,
+  NGINX_CONF,
   StorageRemedy,
   localPathStorageClassObject,
   namespaceObject,
@@ -111,9 +112,20 @@ export async function namespaceExists(store: Store): Promise<boolean> {
   return !!await findOrNull(store, STEVE_TYPES.NAMESPACE, NAMESPACE);
 }
 
-/** Is the nginx config there? Without it a published build's repo pod cannot start. */
-export async function nginxConfigExists(store: Store): Promise<boolean> {
-  return !!await findOrNull(store, STEVE_TYPES.CONFIG_MAP, `${ NAMESPACE }/${ NGINX_CONFIGMAP }`);
+/**
+ * Is the nginx config there, and is it the one this version of the extension
+ * expects?
+ *
+ * Both halves matter and the second is the easy one to miss. A config left
+ * behind by an older build serves the repository at the root and nowhere else,
+ * so a build published against it is reachable from this Rancher and from
+ * nothing outside the cluster - and it fails by 404, with a pod that is running
+ * and healthy and a ClusterRepo that looks fine from here.
+ */
+export async function nginxConfigCurrent(store: Store): Promise<boolean> {
+  const configMap = await findOrNull(store, STEVE_TYPES.CONFIG_MAP, `${ NAMESPACE }/${ NGINX_CONFIGMAP }`);
+
+  return configMap?.data?.['nginx.conf'] === NGINX_CONF;
 }
 
 /**
@@ -218,15 +230,33 @@ export async function ensureNamespace(store: Store): Promise<boolean> {
   return true;
 }
 
-/** Create the nginx config the repo Deployment mounts, and the namespace it lives in. */
+/**
+ * Create the nginx config the repo Deployment mounts, and the namespace it
+ * lives in. Rewrites it when it is out of date.
+ *
+ * The one `ensure*` here that updates rather than leaving an existing object
+ * alone, because this object is ours alone and its content is part of the
+ * extension rather than something a user set. A pod already running keeps the
+ * old config either way - it is mounted with subPath, which never updates -
+ * but every build published afterwards gets the right one.
+ */
 export async function ensureNginxConfig(store: Store): Promise<boolean> {
   await ensureNamespace(store);
 
-  if (await findOrNull(store, STEVE_TYPES.CONFIG_MAP, `${ NAMESPACE }/${ NGINX_CONFIGMAP }`)) {
+  const existing = await findOrNull(store, STEVE_TYPES.CONFIG_MAP, `${ NAMESPACE }/${ NGINX_CONFIGMAP }`);
+
+  if (!existing) {
+    await createResource(store, nginxConfigMapObject());
+
+    return true;
+  }
+
+  if (existing.data?.['nginx.conf'] === NGINX_CONF) {
     return false;
   }
 
-  await createResource(store, nginxConfigMapObject());
+  existing.data = { 'nginx.conf': NGINX_CONF };
+  await existing.save();
 
   return true;
 }
@@ -407,45 +437,44 @@ export async function isPublished(store: Store, id: string): Promise<boolean> {
   return !!await findOrNull(store, STEVE_TYPES.CLUSTER_REPO, buildName(id));
 }
 
-export interface PublishOptions {
-  dashboardHost?: string;
-  dashboardTlsSecret?: string;
-}
-
 /**
- * The repo URL a build's charts were packaged against.
+ * The spec a build was actually run with, read back off its ConfigMap.
  *
- * Read back out of the build's own spec, which is the only place that knows
- * it: the packaging phase has already written this exact string into every
- * chart's plugin.endpoint, so the ClusterRepo has to agree with it rather than
- * work it out again.
+ * Publishing is driven entirely from this rather than from anything the page
+ * is holding, because every address involved was fixed when the build started:
+ * the packaging phase has already written them into each chart's
+ * plugin.endpoint, and a chart cannot be re-pointed afterwards. Deriving them a
+ * second time is how a repository and the charts inside it end up disagreeing.
  */
-async function packagedServiceUrl(store: Store, id: string): Promise<string> {
+async function packagedSpec(store: Store, id: string): Promise<BuildSpec> {
   const configMap = await findOrNull(store, STEVE_TYPES.CONFIG_MAP, `${ NAMESPACE }/${ buildName(id) }`);
   const raw = configMap?.data?.['build.json'];
-  const url = raw ? (JSON.parse(raw) as BuildSpec)?.repo?.serviceUrl : '';
+  const spec = raw ? JSON.parse(raw) as BuildSpec : null;
 
-  if (!url) {
+  if (!spec?.repo?.serviceUrl) {
     throw new Error(`Build ${ id } has no repository URL in its spec. Re-run the build to publish it.`);
   }
 
-  return url;
+  return spec;
 }
 
 /** Stand up nginx over the build's volume and register it as a ClusterRepo. */
-export async function publishBuild(store: Store, id: string, options: PublishOptions = {}): Promise<void> {
+export async function publishBuild(store: Store, id: string): Promise<void> {
   // Cheap and idempotent. Covers a build that was queued before the config
   // existed, which would otherwise fail here with a pod stuck on a missing
-  // volume - 30 minutes after the mistake was made.
+  // volume - 30 minutes after the mistake was made. Also brings an outdated
+  // config up to date, which is what makes external access work on a cluster
+  // that has been running this extension since before it existed.
   await ensureNginxConfig(store);
+
+  const spec = await packagedSpec(store, id);
 
   // The Service already exists - it was created with the build, so that the
   // packaging phase could bake its address into the charts.
-  const objects = publishObjectsFor(
-    id,
-    await packagedServiceUrl(store, id),
-    options.dashboardHost ? { host: options.dashboardHost, tlsSecretName: options.dashboardTlsSecret } : undefined
-  );
+  const objects = publishObjectsFor(id, spec.repo.serviceUrl, {
+    external:  spec.external,
+    dashboard: spec.dashboard?.publicUrl ? dashboardIngressTarget(spec.dashboard.publicUrl) : null
+  });
 
   await createResource(store, objects.deployment);
 
@@ -454,6 +483,15 @@ export async function publishBuild(store: Store, id: string, options: PublishOpt
   }
 
   await createResource(store, objects.clusterRepo);
+}
+
+/** The Ingress host hiding inside the dashboard URL that was baked into the bundle. */
+function dashboardIngressTarget(publicUrl: string): { host: string } | null {
+  try {
+    return { host: new URL(publicUrl).host };
+  } catch {
+    return null;
+  }
 }
 
 /**

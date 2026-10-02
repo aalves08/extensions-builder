@@ -139,3 +139,25 @@ export const repoName = (id: string): string => `extensions-builder-repo-${ id }
  * time - see createBuild.
  */
 export const repoServiceUrl = (clusterIP: string): string => `http://${ clusterIP }:${ NGINX_PORT }`;
+
+/**
+ * Path prefix a build's repository is served under when it is exposed outside
+ * the cluster.
+ *
+ * The repo cannot sit at `/`. The only hostname we can rely on already routing
+ * into this cluster is the one Rancher itself answers on, and an Ingress rule
+ * for `/` on that host would swallow Rancher's own UI. So every externally
+ * reachable build lives under its own prefix, and the build id in it is what
+ * lets several builds share the hostname.
+ *
+ * Also in builder/phases/50-package.sh, indirectly: the packaging phase bakes
+ * whatever URL this produces into each chart's plugin.endpoint.
+ */
+export const EXTERNAL_PATH_PREFIX = '/extensions-builder';
+
+export const repoPublicPath = (id: string): string => `${ EXTERNAL_PATH_PREFIX }/${ id }`;
+
+/** Externally reachable base URL for a build's repository, with no trailing slash. */
+export const repoPublicUrl = (host: string, tls: boolean, id: string): string => (
+  `${ tls ? 'https' : 'http' }://${ (host || '').trim().replace(/^https?:\/\//, '').replace(/\/+$/, '') }${ repoPublicPath(id) }`
+);
