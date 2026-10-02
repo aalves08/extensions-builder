@@ -101,9 +101,24 @@ for i in $(seq 0 $((PKG_COUNT - 1))); do
 
   yq -i ".plugin.endpoint = \"${endpoint}\"" "${chart_dir}/values.yaml"
   yq -i ".plugin.compressedEndpoint = \"${endpoint}.tgz\"" "${chart_dir}/values.yaml"
-  # This build is throwaway and gets rebuilt under the same name, so never let
-  # Rancher serve a stale cached copy of the extension.
-  yq -i '.plugin.noCache = true' "${chart_dir}/values.yaml"
+  # noCache is deliberately left at the chart's default of false.
+  #
+  # It reads like "always fetch fresh", which is exactly what a throwaway build
+  # rebuilt under the same name wants, but it does not mean that. Rancher caches
+  # a plugin under <name>/<version> and serves /v1/uiplugins/... out of that
+  # cache and nowhere else; the dashboard has no second code path, it always
+  # asks for that URL (shell/core/extension-manager-impl.js). Set noCache and
+  # Rancher skips the download, so there is nothing behind the URL and every
+  # asset request comes back 403. The extension installs, reports ready, and
+  # then fails to load.
+  #
+  # Nothing is needed in its place. Rancher already invalidates for us, twice
+  # over (pkg/controllers/dashboard/plugin/fscache.go): SyncWithIndex deletes
+  # any cached directory with no matching UIPlugin, so uninstalling clears it,
+  # and SyncWithControllersCache deletes before re-fetching whenever
+  # generation > observedGeneration, which is true for every freshly created
+  # UIPlugin. A rebuild reinstalled under the same name and version is fetched
+  # again.
 
   if [ -f "${source_dir}/pkg/${pkg}/README.md" ]; then
     cp "${source_dir}/pkg/${pkg}/README.md" "${chart_dir}/README.md"
